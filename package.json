@@ -2,6 +2,7 @@
     "name": "dugpunkt-app",
     "version": "1.0.0",
     "description": "Dugpunktskurve React app",
+    "homepage": "https://geovidenskab.github.io/dewpoint",
     "main": "index.js",
     "scripts": {
         "start": "react-scripts start",
