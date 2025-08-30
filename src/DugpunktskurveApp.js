@@ -228,11 +228,11 @@ export default function DugpunktskurveApp() {
                 .replace(".", ",")} g/m³<extra></extra>`,
             });
 
-            // Værdi og begreb ved dugpunktkurven (bedre placering)
+            // Værdi og begreb ved dugpunktkurven (placeret til venstre for kurven)
             if (animationStep === 1) {
               traces.push({
-                x: [temp],
-                y: [tempHumidity + 2],
+                x: [temp - 8], // Placeret 8°C til venstre for temperaturen
+                y: [tempHumidity],
                 type: "scatter",
                 mode: "text",
                 text: [
@@ -240,7 +240,7 @@ export default function DugpunktskurveApp() {
                     .toFixed(1)
                     .replace(".", ",")} g/m³`,
                 ],
-                textposition: "top center",
+                textposition: "middle right", // Tekst justeret til højre af punktet
                 name: "Maksimalt vandindhold værdi",
                 textfont: {
                   color: "#dc2626",
@@ -316,11 +316,11 @@ export default function DugpunktskurveApp() {
               });
             }
 
-            // Værdi og begreb ved krydset (bedre placering)
+            // Værdi og begreb ved krydset (placeret til venstre for kurven)
             if (animationStep === 2) {
               traces.push({
-                x: [temp],
-                y: [dewPointHumidity + 2],
+                x: [temp - 8], // Placeret 8°C til venstre for temperaturen
+                y: [dewPointHumidity],
                 type: "scatter",
                 mode: "text",
                 text: [
@@ -328,7 +328,7 @@ export default function DugpunktskurveApp() {
                     .toFixed(1)
                     .replace(".", ",")} g/m³`,
                 ],
-                textposition: "top center",
+                textposition: "middle right", // Tekst justeret til højre af punktet
                 name: "Faktisk vandindhold værdi",
                 textfont: {
                   color: "#10b981",
@@ -366,9 +366,9 @@ export default function DugpunktskurveApp() {
           if (animationStep >= 3) {
             // Beregningsformel ved kurven i trin 3
             if (animationStep === 3) {
-              // Placér formlen længere til venstre, fri af kurven
-              const formelX = Math.min(dewPoint, temp) - 5; // 5°C til venstre for det mindste punkt
-              const midY = (dewPointHumidity + tempHumidity) / 2;
+                          // Placér formlen længere til venstre, fri af kurven
+            const formelX = Math.min(dewPoint, temp) - 12; // 12°C til venstre for det mindste punkt
+            const midY = (dewPointHumidity + tempHumidity) / 2;
 
               // Beregn RH som forholdet mellem faktisk og maksimalt vandindhold
               const calculatedRH = (dewPointHumidity / tempHumidity) * 100;
@@ -387,7 +387,7 @@ export default function DugpunktskurveApp() {
                     .toFixed(1)
                     .replace(".", ",")}%`,
                 ],
-                textposition: "middle center",
+                textposition: "middle right",
                 name: "Beregningsformel",
                 textfont: {
                   color: "#7c3aed",
