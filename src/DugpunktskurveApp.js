@@ -232,7 +232,7 @@ export default function DugpunktskurveApp() {
             if (animationStep === 1) {
               traces.push({
                 x: [temp - 8], // Placeret 8°C til venstre for temperaturen
-                y: [tempHumidity],
+                y: [tempHumidity + 3], // Placeret 3 g/m³ over stregen
                 type: "scatter",
                 mode: "text",
                 text: [
@@ -320,7 +320,7 @@ export default function DugpunktskurveApp() {
             if (animationStep === 2) {
               traces.push({
                 x: [temp - 8], // Placeret 8°C til venstre for temperaturen
-                y: [dewPointHumidity],
+                y: [dewPointHumidity + 3], // Placeret 3 g/m³ over stregen
                 type: "scatter",
                 mode: "text",
                 text: [
@@ -366,16 +366,16 @@ export default function DugpunktskurveApp() {
           if (animationStep >= 3) {
             // Beregningsformel ved kurven i trin 3
             if (animationStep === 3) {
-                          // Placér formlen længere til venstre, fri af kurven
-            const formelX = Math.min(dewPoint, temp) - 12; // 12°C til venstre for det mindste punkt
-            const midY = (dewPointHumidity + tempHumidity) / 2;
+              // Placér formlen længere til venstre, fri af kurven
+              const formelX = Math.min(dewPoint, temp) - 12; // 12°C til venstre for det mindste punkt
+              const midY = (dewPointHumidity + tempHumidity) / 2;
 
               // Beregn RH som forholdet mellem faktisk og maksimalt vandindhold
               const calculatedRH = (dewPointHumidity / tempHumidity) * 100;
 
               traces.push({
                 x: [formelX],
-                y: [midY],
+                y: [midY + 2], // Placeret 2 g/m³ over midtpunktet
                 type: "scatter",
                 mode: "text",
                 text: [
