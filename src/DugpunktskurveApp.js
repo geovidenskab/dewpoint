@@ -15,7 +15,7 @@ export default function DugpunktskurveApp() {
   const [showExplanation, setShowExplanation] = useState(false);
   const [animationStep, setAnimationStep] = useState(0);
   const [pulseOpacity, setPulseOpacity] = useState(0);
-  const [showUnsaturated, setShowUnsaturated] = useState(false);
+  const [showUnsaturated, setShowUnsaturated] = useState(true);
 
   // Tjek og juster zoom når input-værdier ændres
   useEffect(() => {
@@ -155,7 +155,7 @@ export default function DugpunktskurveApp() {
       if (dewPoint >= -45 && dewPoint <= 60) {
         const humidity = absoluteHumidity(dewPoint);
         traces.push({
-          x: [dewPoint, dewPoint], // Kun lodret streg fra x-akse til kurven
+          x: [dewPoint, dewPoint], // Lodret streg fra x-akse til kurven
           y: [0, humidity], // Fra x-akse til kurven
           type: "scatter",
           mode: "lines",
@@ -172,6 +172,28 @@ export default function DugpunktskurveApp() {
             .toFixed(2)
             .replace(".", ",")} g/m³<extra></extra>`,
         });
+
+        // Vandret grøn streg fra dugpunktet til det sorte punkt
+        if (inputTemp && !isNaN(parseFloat(inputTemp))) {
+          const temp = parseFloat(inputTemp);
+          traces.push({
+            x: [dewPoint, temp], // Kun fra dugpunktet til temperatur
+            y: [humidity, humidity], // Vandret på dugpunktets luftfugtighed
+            type: "scatter",
+            mode: "lines",
+            name: "Vandret dugpunkt streg",
+            line: {
+              color: "#10b981", // Grøn farve
+              width: 1.5,
+              dash: "dot",
+              shape: "linear",
+            },
+            showlegend: false,
+            hovertemplate: `Vandret streg: ${humidity
+              .toFixed(2)
+              .replace(".", ",")} g/m³<extra></extra>`,
+          });
+        }
 
         // Blå cirkel ved dugpunktet
         traces.push({
@@ -502,6 +524,7 @@ export default function DugpunktskurveApp() {
               traces.push({
                 x: [formelX],
                 y: [midY], // Placeret ved midtpunktet, undgå legend
+
                 type: "scatter",
                 mode: "text",
                 text: [
@@ -740,15 +763,15 @@ export default function DugpunktskurveApp() {
     const minTemp = Math.min(temp, dewPoint);
     const maxTemp = Math.max(temp, dewPoint);
 
-    // Beregn passende zoom-interval med margin
-    const tempMargin = Math.max(8, (maxTemp - minTemp) * 0.4); // Mindst 8°C margin, eller 40% af temperaturspændet
-    const humidityMargin = Math.max(3, (maxHumidity - minHumidity) * 0.4); // Mindst 3 g/m³ margin, eller 40% af fugtighedsspændet
+    // Beregn passende zoom-interval med mindre aggressive margener
+    const tempMargin = Math.max(3, (maxTemp - minTemp) * 0.2); // Mindst 3°C margin, eller 20% af temperaturspændet
+    const humidityMargin = Math.max(1, (maxHumidity - minHumidity) * 0.2); // Mindst 1 g/m³ margin, eller 20% af fugtighedsspændet
 
-    // Sæt nye zoom-grænser med mere fokus på lavere x-værdier
+    // Sæt nye zoom-grænser med ekstra plads til højre for forklaringstekst
     const newZoom = {
       x: [
-        Math.max(-45, minTemp - tempMargin * 1.5), // Giv mere plads til lavere temperaturer
-        Math.min(60, maxTemp + tempMargin * 0.8), // Mindre plads til højere temperaturer
+        Math.max(-45, minTemp - tempMargin), // Mindre plads til lavere temperaturer
+        Math.min(60, maxTemp + tempMargin * 2), // Ekstra plads til højre for forklaringstekst
       ],
       y: [
         0, // Start altid fra 0 g/m³
@@ -829,6 +852,73 @@ export default function DugpunktskurveApp() {
                 Mætningskurven viser den maksimale mængde vanddamp (g/m³) som
                 luften kan indeholde ved forskellige temperaturer.
               </p>
+
+              {/* Animation menu over beregningsboksen */}
+              {intersectionPoint && showExplanation && (
+                <div className="mb-3 p-2 bg-yellow-50 border border-yellow-200 rounded-lg">
+                  <div className="flex items-center mb-2">
+                    <h4 className="font-semibold text-yellow-800 text-base">
+                      Forklaring:
+                    </h4>
+                    <span
+                      className={`font-semibold text-sm ml-2 ${
+                        animationStep === 1
+                          ? "text-red-600"
+                          : animationStep === 2
+                          ? "text-green-600"
+                          : animationStep === 3
+                          ? "text-purple-600"
+                          : "text-yellow-800"
+                      }`}
+                    >
+                      {animationStep === 1 && "Trin 1: Maksimalt vandindhold"}
+                      {animationStep === 2 && "Trin 2: Faktisk vandindhold"}
+                      {animationStep === 3 && "Trin 3: Beregning"}
+                    </span>
+                  </div>
+                  <div className="flex space-x-1 mb-2">
+                    <div
+                      className={`h-1.5 flex-1 rounded ${
+                        animationStep >= 1 ? "bg-red-500" : "bg-gray-200"
+                      }`}
+                    ></div>
+                    <div
+                      className={`h-1.5 flex-1 rounded ${
+                        animationStep >= 2 ? "bg-green-500" : "bg-gray-200"
+                      }`}
+                    ></div>
+                    <div
+                      className={`h-1.5 flex-1 rounded ${
+                        animationStep >= 3 ? "bg-purple-500" : "bg-gray-200"
+                      }`}
+                    ></div>
+                  </div>
+                  <div className="flex space-x-2">
+                    <button
+                      onClick={previousAnimationStep}
+                      disabled={animationStep <= 1}
+                      className={`px-2 py-1 text-xs rounded ${
+                        animationStep <= 1
+                          ? "bg-gray-100 text-gray-400 cursor-not-allowed"
+                          : "bg-blue-100 text-blue-700 hover:bg-blue-200"
+                      }`}
+                    >
+                      ← Forrige
+                    </button>
+                    <button
+                      onClick={nextAnimationStep}
+                      disabled={animationStep >= 3}
+                      className={`px-2 py-1 text-xs rounded ${
+                        animationStep >= 3
+                          ? "bg-gray-100 text-gray-400 cursor-not-allowed"
+                          : "bg-green-100 text-green-700 hover:bg-green-200"
+                      }`}
+                    >
+                      Næste →
+                    </button>
+                  </div>
+                </div>
+              )}
 
               <div className="space-y-4 mb-4">
                 <div>
@@ -984,136 +1074,81 @@ export default function DugpunktskurveApp() {
 
               {(intersectionPoint ||
                 (showExplanation && inputTemp && inputDewPoint)) && (
-                <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-                  <h3 className="font-semibold text-blue-800 mb-2">
+                <div className="mt-3 p-2 bg-blue-50 border border-blue-200 rounded-lg">
+                  <h3 className="font-semibold text-blue-800 mb-1 text-sm">
                     Beregning af relativ luftfugtighed
                   </h3>
 
-                  {showExplanation && (
-                    <div className="mb-3 p-2 bg-white border rounded text-sm">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="font-medium">Animation trin:</span>
-                        <span className="text-xs bg-gray-100 px-2 py-1 rounded">
-                          {animationStep === 1 &&
-                            "Trin 1: Maksimalt vandindhold"}
-                          {animationStep === 2 && "Trin 2: Faktisk vandindhold"}
-                          {animationStep === 3 && "Trin 3: Beregning"}
-                        </span>
-                      </div>
-                      <div className="flex space-x-1 mb-3">
-                        <div
-                          className={`h-2 flex-1 rounded ${
-                            animationStep >= 1 ? "bg-red-500" : "bg-gray-200"
-                          }`}
-                        ></div>
-                        <div
-                          className={`h-2 flex-1 rounded ${
-                            animationStep >= 2 ? "bg-green-500" : "bg-gray-200"
-                          }`}
-                        ></div>
-                        <div
-                          className={`h-2 flex-1 rounded ${
-                            animationStep >= 3 ? "bg-purple-500" : "bg-gray-200"
-                          }`}
-                        ></div>
-                      </div>
-                      <div className="flex space-x-2">
-                        <button
-                          onClick={previousAnimationStep}
-                          disabled={animationStep <= 1}
-                          className={`px-3 py-1 text-xs rounded ${
-                            animationStep <= 1
-                              ? "bg-gray-100 text-gray-400 cursor-not-allowed"
-                              : "bg-blue-100 text-blue-700 hover:bg-blue-200"
-                          }`}
-                        >
-                          ← Forrige
-                        </button>
-                        <button
-                          onClick={nextAnimationStep}
-                          disabled={animationStep >= 3}
-                          className={`px-3 py-1 text-xs rounded ${
-                            animationStep >= 3
-                              ? "bg-gray-100 text-gray-400 cursor-not-allowed"
-                              : "bg-green-100 text-green-700 hover:bg-green-200"
-                          }`}
-                        >
-                          Næste →
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                  <div className="space-y-1 text-sm">
+                  <div className="space-y-1 text-xs">
                     <p>
-                      <strong>Temperatur:</strong>{" "}
+                      <strong style={{ color: "#ef4444" }}>
+                        Lufttemperatur:
+                      </strong>{" "}
                       {intersectionPoint
                         ? intersectionPoint.temperature
                         : parseFloat(inputTemp)}{" "}
                       °C
                     </p>
                     <p>
-                      <strong>Dugpunkt:</strong>{" "}
+                      <strong style={{ color: "#3b82f6" }}>
+                        Dugpunktstemperatur:
+                      </strong>{" "}
                       {intersectionPoint
                         ? intersectionPoint.dewPoint
                         : parseFloat(inputDewPoint)}{" "}
                       °C
                     </p>
                     <p>
-                      <strong>Luftfugtighed:</strong>{" "}
+                      <strong style={{ color: "#10b981" }}>
+                        Luftfugtighed:
+                      </strong>{" "}
                       {intersectionPoint
-                        ? intersectionPoint.humidity
-                            .toFixed(2)
-                            .replace(".", ",")
-                        : absoluteHumidity(parseFloat(inputDewPoint))
-                            .toFixed(2)
-                            .replace(".", ",")}{" "}
+                        ? Math.round(intersectionPoint.humidity)
+                        : Math.round(
+                            absoluteHumidity(parseFloat(inputDewPoint))
+                          )}{" "}
                       g/m³
                     </p>
                     <p>
-                      <strong>Relativ fugtighed:</strong>{" "}
+                      <strong style={{ color: "#8b5cf6" }}>
+                        Relativ luftfugtighed:
+                      </strong>{" "}
                       {intersectionPoint
-                        ? intersectionPoint.relativeHumidity
-                            .toFixed(1)
-                            .replace(".", ",")
-                        : (
+                        ? Math.round(intersectionPoint.relativeHumidity)
+                        : Math.round(
                             (absoluteHumidity(parseFloat(inputDewPoint)) /
                               absoluteHumidity(parseFloat(inputTemp))) *
-                            100
-                          )
-                            .toFixed(1)
-                            .replace(".", ",")}
+                              100
+                          )}
                       %
                     </p>
                   </div>
 
-                  <div className="mt-3 p-2 bg-white border rounded text-xs">
-                    <div className="space-y-2">
+                  <div className="mt-2 p-1 bg-white border rounded text-xs">
+                    <div className="space-y-1">
                       <p>
                         <InlineMath math="\text{RH} = \frac{\text{faktisk indhold}}{\text{maksimalt indhold}}" />
                       </p>
                       <p>
                         <InlineMath
-                          math={`\\text{RH} = \\frac{\\color{green}{${absoluteHumidity(
-                            intersectionPoint
-                              ? intersectionPoint.dewPoint
-                              : parseFloat(inputDewPoint)
-                          )
-                            .toFixed(1)
-                            .replace(
-                              ".",
-                              ","
-                            )} \\text{ g/m³}}}{\\color{red}{${absoluteHumidity(
-                            intersectionPoint
-                              ? intersectionPoint.temperature
-                              : parseFloat(inputTemp)
-                          )
-                            .toFixed(1)
-                            .replace(".", ",")} \\text{ g/m³}}}`}
+                          math={`\\text{RH} = \\frac{\\color{green}{${Math.round(
+                            absoluteHumidity(
+                              intersectionPoint
+                                ? intersectionPoint.dewPoint
+                                : parseFloat(inputDewPoint)
+                            )
+                          )} \\text{ g/m³}}}{\\color{red}{${Math.round(
+                            absoluteHumidity(
+                              intersectionPoint
+                                ? intersectionPoint.temperature
+                                : parseFloat(inputTemp)
+                            )
+                          )} \\text{ g/m³}}}`}
                         />
                       </p>
                       <p>
                         <InlineMath
-                          math={`\\text{RH} = ${(
+                          math={`\\text{RH} = ${Math.round(
                             (absoluteHumidity(
                               intersectionPoint
                                 ? intersectionPoint.dewPoint
@@ -1124,10 +1159,8 @@ export default function DugpunktskurveApp() {
                                   ? intersectionPoint.temperature
                                   : parseFloat(inputTemp)
                               )) *
-                            100
-                          )
-                            .toFixed(1)
-                            .replace(".", ",")} \\%`}
+                              100
+                          )} \\%`}
                         />
                       </p>
                     </div>
