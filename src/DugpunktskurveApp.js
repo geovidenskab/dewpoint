@@ -1172,6 +1172,9 @@ export default function DugpunktskurveApp() {
                 Magnus formel (Sonntag90): Ew = α·exp((β·T)/(λ+T)) hvor α=6.112
                 hPa, β=17.62, λ=243.12 °C.
               </p>
+              <p className="mt-2 text-xs text-slate-400 text-center">
+                Philip K. Jakobsen
+              </p>
             </div>
           </div>
 
