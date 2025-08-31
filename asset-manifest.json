@@ -1,7 +1,7 @@
 {
   "files": {
-    "main.css": "/dewpoint/static/css/main.e933c6c2.css",
-    "main.js": "/dewpoint/static/js/main.6b2eedd5.js",
+    "main.css": "/dewpoint/static/css/main.44ef3174.css",
+    "main.js": "/dewpoint/static/js/main.2b13b50d.js",
     "static/media/KaTeX_AMS-Regular.ttf": "/dewpoint/static/media/KaTeX_AMS-Regular.853be92419a6c3766b9a.ttf",
     "static/media/KaTeX_Main-Regular.ttf": "/dewpoint/static/media/KaTeX_Main-Regular.9eba1d77abcf2aa6e94e.ttf",
     "static/media/KaTeX_Main-Bold.ttf": "/dewpoint/static/media/KaTeX_Main-Bold.8169508bf58f8bd92ad8.ttf",
@@ -63,11 +63,11 @@
     "static/media/KaTeX_Size3-Regular.woff": "/dewpoint/static/media/KaTeX_Size3-Regular.7947224e8a9914fa332b.woff",
     "static/media/KaTeX_Size3-Regular.woff2": "/dewpoint/static/media/KaTeX_Size3-Regular.e1951519f6f0596f7356.woff2",
     "index.html": "/dewpoint/index.html",
-    "main.e933c6c2.css.map": "/dewpoint/static/css/main.e933c6c2.css.map",
-    "main.6b2eedd5.js.map": "/dewpoint/static/js/main.6b2eedd5.js.map"
+    "main.44ef3174.css.map": "/dewpoint/static/css/main.44ef3174.css.map",
+    "main.2b13b50d.js.map": "/dewpoint/static/js/main.2b13b50d.js.map"
   },
   "entrypoints": [
-    "static/css/main.e933c6c2.css",
-    "static/js/main.6b2eedd5.js"
+    "static/css/main.44ef3174.css",
+    "static/js/main.2b13b50d.js"
   ]
 }
