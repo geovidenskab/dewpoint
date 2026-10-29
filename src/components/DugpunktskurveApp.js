@@ -1,56 +1,19 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import createPlotlyComponent from "react-plotly.js/factory";
-import Plotly from "plotly.js-basic-dist";
 import "katex/dist/katex.min.css";
 import { InlineMath } from "react-katex";
-
-const Plot = createPlotlyComponent(Plotly);
-
-// ---------------------------------------------------------------------------
-// Fysik — Magnus-formlen med Sonntag90-konstanter, gyldig -45..60 °C over vand.
-// Under 0 °C gælder kurven (underafkølet) vand, ikke is — standard i meteorologi.
-// ---------------------------------------------------------------------------
-const ALPHA = 6.112; // hPa
-const BETA = 17.62;
-const LAMBDA = 243.12; // °C
-const T_MIN = -45;
-const T_MAX = 60;
-
-function saturationVaporPressure(T) {
-  // Ew = α · exp((β·T)/(λ+T))
-  return ALPHA * Math.exp((BETA * T) / (LAMBDA + T));
-}
-
-function absoluteHumidity(T) {
-  // Idealgas: ρ = e·Mw / (R·Tk), e i Pa, Mw = 18.015 g/mol, R = 8.314 J/(mol·K)
-  const e = saturationVaporPressure(T) * 100;
-  return (e * 18.015) / (8.314 * (T + 273.15));
-}
-
-// ---------------------------------------------------------------------------
-// Formatering — én decimal med dansk komma, og alle viste beregninger laves af
-// de viste (afrundede) tal, så eleven altid kan reproducere regnestykket.
-// ---------------------------------------------------------------------------
-const round1 = (x) => Math.round(x * 10) / 10;
-const fmt1 = (x) => round1(x).toFixed(1).replace(".", ",");
-const parseDa = (s) => parseFloat(String(s).replace(",", "."));
-const INPUT_RE = /^-?\d*[.,]?\d*$/; // tillader at skrive værdien færdig, komma eller punktum
-
-const DEFAULT_ZOOM = { x: [-10, 40], y: [0, 50] };
-
-// Farvesystem: rød = lufttemperatur/maksimalt indhold, grøn = dugpunkt/faktisk
-// indhold, mørkeblå = mætningskurve, lilla = relativ luftfugtighed.
-// Tekstfarverne er mørkere varianter af hensyn til kontrast (WCAG).
-const COL = {
-  curve: "#1e40af",
-  fill: "rgba(59, 130, 246, 0.08)",
-  red: "#ef4444",
-  redText: "#b91c1c",
-  green: "#10b981",
-  greenText: "#047857",
-  dark: "#1f2937",
-  purple: "#7c3aed",
-};
+import Plot from "./Plot";
+import {
+  absoluteHumidity,
+  generateTemperatureArray,
+  round1,
+  fmt1,
+  parseDa,
+  INPUT_RE,
+  DEFAULT_ZOOM,
+  COL,
+  T_MIN,
+  T_MAX,
+} from "../utils/meteorology";
 
 export default function DugpunktskurveApp() {
   const [plotKey, setPlotKey] = useState(0);
@@ -139,11 +102,7 @@ export default function DugpunktskurveApp() {
     }
   }, [pairValid, showExplanation]);
 
-  const xs = useMemo(() => {
-    const arr = [];
-    for (let t = T_MIN; t <= T_MAX + 1e-9; t += 0.25) arr.push(parseFloat(t.toFixed(6)));
-    return arr;
-  }, []);
+  const xs = useMemo(() => generateTemperatureArray(), []);
   const ys = useMemo(() => xs.map((T) => absoluteHumidity(T)), [xs]);
 
   const data = useMemo(() => {
@@ -359,7 +318,7 @@ export default function DugpunktskurveApp() {
         }
       }
 
-      // Trin 3: beregningen — samme afrundede tal som boksen, så alt stemmer
+      // Trin 3: beregningen — samme afrundede tal som resultatkortet, så alt stemmer
       if (animationStep === 3) {
         traces.push({
           x: [textX],
@@ -436,23 +395,23 @@ export default function DugpunktskurveApp() {
     xaxis: {
       title: { text: "Temperatur i °C", font: { size: 14, color: "#374151" } },
       range: currentZoom.x,
-      gridcolor: "#e5e7eb",
-      zerolinecolor: "#d1d5db",
+      gridcolor: "#f3f4f6",
+      zerolinecolor: "#e5e7eb",
       showline: true,
-      linecolor: "#d1d5db",
+      linecolor: "#e5e7eb",
       tickfont: { size: 12, color: "#6b7280" },
     },
     yaxis: {
       title: { text: "Absolut luftfugtighed (g vanddamp/m³)", font: { size: 14, color: "#374151" } },
       rangemode: "tozero",
       range: currentZoom.y,
-      gridcolor: "#e5e7eb",
-      zerolinecolor: "#d1d5db",
+      gridcolor: "#f3f4f6",
+      zerolinecolor: "#e5e7eb",
       showline: true,
-      linecolor: "#d1d5db",
+      linecolor: "#e5e7eb",
       tickfont: { size: 12, color: "#6b7280" },
     },
-    separators: ",.", // dansk komma i alle Plotly-formaterede tal (hover og aksetal)
+    separators: ",.", // dansk komma i alle Plotly-formaterede tal
     margin: { l: 80, r: 20, t: 20, b: 50 },
     hovermode: "closest",
     dragmode: "zoom",
@@ -466,7 +425,7 @@ export default function DugpunktskurveApp() {
       xanchor: "left",
       yanchor: "top",
       bgcolor: "rgba(255,255,255,0.9)",
-      bordercolor: "#d1d5db",
+      bordercolor: "#e5e7eb",
       borderwidth: 1,
       font: { size: 12, color: "#374151" },
     },
@@ -530,254 +489,255 @@ export default function DugpunktskurveApp() {
       : null;
 
   return (
-    <div className="min-h-screen bg-white text-slate-800">
-      <div className="max-w-7xl mx-auto p-4">
-        <h1 className="text-2xl font-semibold mb-4">Luftens mætningskurve</h1>
+    <div className="flex flex-col lg:flex-row gap-6">
+      {/* Graf — øverst på mobil, til højre på desktop */}
+      <div className="flex-1 order-1 lg:order-2">
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+          <Plot
+            key={plotKey}
+            data={data}
+            layout={layout}
+            style={{ width: "100%", height: "70vh", minHeight: 400 }}
+            config={config}
+            useResizeHandler
+            onRelayout={(eventData) => {
+              if (
+                eventData["xaxis.range[0]"] !== undefined &&
+                eventData["xaxis.range[1]"] !== undefined &&
+                eventData["yaxis.range[0]"] !== undefined &&
+                eventData["yaxis.range[1]"] !== undefined
+              ) {
+                applyZoom({
+                  x: [eventData["xaxis.range[0]"], eventData["xaxis.range[1]"]],
+                  y: [eventData["yaxis.range[0]"], eventData["yaxis.range[1]"]],
+                });
+              }
+            }}
+          />
+        </div>
+      </div>
 
-        <div className="flex flex-col lg:flex-row gap-6">
-          {/* Graf — øverst på mobil, til højre på desktop */}
-          <div className="flex-1 order-1 lg:order-2">
-            <div className="rounded-xl border">
-              <Plot
-                key={plotKey}
-                data={data}
-                layout={layout}
-                style={{ width: "100%", height: "70vh", minHeight: 400 }}
-                config={config}
-                useResizeHandler
-                onRelayout={(eventData) => {
-                  if (
-                    eventData["xaxis.range[0]"] !== undefined &&
-                    eventData["xaxis.range[1]"] !== undefined &&
-                    eventData["yaxis.range[0]"] !== undefined &&
-                    eventData["yaxis.range[1]"] !== undefined
-                  ) {
-                    applyZoom({
-                      x: [eventData["xaxis.range[0]"], eventData["xaxis.range[1]"]],
-                      y: [eventData["yaxis.range[0]"], eventData["yaxis.range[1]"]],
-                    });
-                  }
-                }}
-              />
-            </div>
-          </div>
+      {/* Kontrolpanel */}
+      <div className="lg:w-80 flex-shrink-0 order-2 lg:order-1 space-y-4">
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-5">
+          <p className="text-sm text-gray-500 font-light mb-5">
+            Mætningskurven viser den maksimale mængde vanddamp (g/m³) som luften
+            kan indeholde ved forskellige temperaturer.
+          </p>
 
-          {/* Kontrolpanel */}
-          <div className="lg:w-80 flex-shrink-0 order-2 lg:order-1">
-            <div className="p-4 border rounded-xl bg-gray-50 h-fit">
-              <p className="text-sm text-slate-600 mb-4">
-                Mætningskurven viser den maksimale mængde vanddamp (g/m³) som
-                luften kan indeholde ved forskellige temperaturer.
-              </p>
-
-              {intersection && showExplanation && (
-                <div className="mb-3 p-2 bg-yellow-50 border border-yellow-200 rounded-lg">
-                  <div className="flex items-center mb-2">
-                    <h4 className="font-semibold text-yellow-800 text-base">Forklaring:</h4>
-                    <span
-                      className={`font-semibold text-sm ml-2 ${
-                        animationStep === 1
-                          ? "text-red-700"
-                          : animationStep === 2
-                          ? "text-emerald-700"
-                          : "text-purple-700"
-                      }`}
-                    >
-                      {animationStep === 1 && "Trin 1: Maksimalt vandindhold"}
-                      {animationStep === 2 && "Trin 2: Faktisk vandindhold"}
-                      {animationStep === 3 && "Trin 3: Beregning"}
-                    </span>
-                  </div>
-                  <div className="flex space-x-1 mb-2">
-                    <div className={`h-1.5 flex-1 rounded ${animationStep >= 1 ? "bg-red-500" : "bg-gray-200"}`}></div>
-                    <div className={`h-1.5 flex-1 rounded ${animationStep >= 2 ? "bg-emerald-500" : "bg-gray-200"}`}></div>
-                    <div className={`h-1.5 flex-1 rounded ${animationStep >= 3 ? "bg-purple-500" : "bg-gray-200"}`}></div>
-                  </div>
-                  <div className="flex space-x-2">
-                    <button
-                      onClick={() => setAnimationStep((s) => Math.max(1, s - 1))}
-                      disabled={animationStep <= 1}
-                      className={`px-2 py-1 text-xs rounded ${
-                        animationStep <= 1
-                          ? "bg-gray-100 text-gray-400 cursor-not-allowed"
-                          : "bg-blue-100 text-blue-700 hover:bg-blue-200"
-                      }`}
-                    >
-                      ← Forrige
-                    </button>
-                    <button
-                      onClick={() => setAnimationStep((s) => Math.min(3, s + 1))}
-                      disabled={animationStep >= 3}
-                      className={`px-2 py-1 text-xs rounded ${
-                        animationStep >= 3
-                          ? "bg-gray-100 text-gray-400 cursor-not-allowed"
-                          : "bg-emerald-100 text-emerald-700 hover:bg-emerald-200"
-                      }`}
-                    >
-                      Næste →
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              <div className="space-y-4 mb-4">
-                <div>
-                  <label htmlFor="input-temp" className="block text-sm font-medium text-gray-700 mb-2">
-                    Temperatur (°C)
-                  </label>
-                  <input
-                    id="input-temp"
-                    type="text"
-                    inputMode="decimal"
-                    value={inputTemp}
-                    onChange={handleInput(setInputTemp)}
-                    placeholder={`Indtast temperatur (${T_MIN} til ${T_MAX} °C)`}
-                    aria-describedby="temp-help temp-error"
-                    className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                      tempError || pairError ? "border-red-500 bg-red-50" : "border-gray-300"
-                    }`}
-                  />
-                  {tempError && (
-                    <p id="temp-error" role="alert" className="text-xs text-red-700 mt-1">
-                      {tempError}
-                    </p>
-                  )}
-                  <p id="temp-help" className="text-xs text-gray-600 mt-1">
-                    Rød stiplet streg tegnes fra x-aksen op til kurven
-                  </p>
-                </div>
-
-                <div>
-                  <label htmlFor="input-dew" className="block text-sm font-medium text-gray-700 mb-2">
-                    Dugpunktstemperatur (°C)
-                  </label>
-                  <input
-                    id="input-dew"
-                    type="text"
-                    inputMode="decimal"
-                    value={inputDewPoint}
-                    onChange={handleInput(setInputDewPoint)}
-                    placeholder={`Indtast dugpunkt (${T_MIN} til ${T_MAX} °C)`}
-                    aria-describedby="dew-help dew-error"
-                    className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                      dewRangeError || pairError ? "border-red-500 bg-red-50" : "border-gray-300"
-                    }`}
-                  />
-                  {(dewRangeError || pairError) && (
-                    <p id="dew-error" role="alert" className="text-xs text-red-700 mt-1">
-                      {dewRangeError || pairError}
-                    </p>
-                  )}
-                  <p id="dew-help" className="text-xs text-gray-600 mt-1">
-                    Grøn prikket streg tegnes op til kurven — sammen med
-                    temperaturen vises luftmassens punkt
-                  </p>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <button
-                  onClick={() => setShowUnsaturated(!showUnsaturated)}
-                  className={`w-full px-3 py-2 border rounded-lg ${
-                    showUnsaturated
-                      ? "bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-300"
-                      : "bg-gray-50 hover:bg-gray-100 text-gray-700 border-gray-300"
+          {intersection && showExplanation && (
+            <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-xl">
+              <div className="flex items-center mb-2">
+                <h4 className="font-semibold text-amber-800 text-sm">Forklaring</h4>
+                <span
+                  className={`font-medium text-sm ml-2 ${
+                    animationStep === 1
+                      ? "text-red-700"
+                      : animationStep === 2
+                      ? "text-emerald-700"
+                      : "text-purple-700"
                   }`}
                 >
-                  {showUnsaturated ? "Skjul umættet" : "Vis umættet"}
-                </button>
-
-                {intersection && (
-                  <button
-                    onClick={showExplanation ? stopExplanation : startExplanation}
-                    className={`w-full px-3 py-2 border rounded-lg ${
-                      showExplanation
-                        ? "bg-orange-50 hover:bg-orange-100 text-orange-700 border-orange-300"
-                        : "bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-300"
-                    }`}
-                  >
-                    {showExplanation ? "Stop forklaring" : "Forklar beregningen"}
-                  </button>
-                )}
-
+                  {animationStep === 1 && "1 · Maksimalt vandindhold"}
+                  {animationStep === 2 && "2 · Faktisk vandindhold"}
+                  {animationStep === 3 && "3 · Beregning"}
+                </span>
+              </div>
+              <div className="flex space-x-1 mb-3">
+                <div className={`h-1 flex-1 rounded ${animationStep >= 1 ? "bg-red-500" : "bg-gray-200"}`}></div>
+                <div className={`h-1 flex-1 rounded ${animationStep >= 2 ? "bg-emerald-500" : "bg-gray-200"}`}></div>
+                <div className={`h-1 flex-1 rounded ${animationStep >= 3 ? "bg-purple-500" : "bg-gray-200"}`}></div>
+              </div>
+              <div className="flex gap-2">
                 <button
-                  onClick={resetAndClear}
-                  className="w-full px-3 py-2 border rounded-lg bg-red-50 hover:bg-red-100 text-red-700 border-red-300"
+                  onClick={() => setAnimationStep((s) => Math.max(1, s - 1))}
+                  disabled={animationStep <= 1}
+                  className={`px-3 py-1.5 text-xs rounded-lg border transition-colors ${
+                    animationStep <= 1
+                      ? "border-gray-200 text-gray-300 cursor-not-allowed"
+                      : "border-gray-300 text-gray-700 hover:bg-gray-50"
+                  }`}
                 >
-                  Ryd og nulstil
+                  ← Forrige
+                </button>
+                <button
+                  onClick={() => setAnimationStep((s) => Math.min(3, s + 1))}
+                  disabled={animationStep >= 3}
+                  className={`px-3 py-1.5 text-xs rounded-lg border transition-colors ${
+                    animationStep >= 3
+                      ? "border-gray-200 text-gray-300 cursor-not-allowed"
+                      : "border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                  }`}
+                >
+                  Næste →
                 </button>
               </div>
+            </div>
+          )}
 
-              {intersection && (
-                <div className="mt-3 p-2 bg-blue-50 border border-blue-200 rounded-lg">
-                  <h3 className="font-semibold text-blue-800 mb-1 text-sm">
-                    Beregning af relativ luftfugtighed
-                  </h3>
-
-                  <div className="space-y-1 text-xs">
-                    <p>
-                      <strong style={{ color: COL.redText }}>Lufttemperatur:</strong>{" "}
-                      {fmt1(temp)} °C
-                    </p>
-                    <p>
-                      <strong style={{ color: COL.greenText }}>Dugpunktstemperatur:</strong>{" "}
-                      {fmt1(dewPoint)} °C
-                    </p>
-                    <p>
-                      <strong style={{ color: COL.greenText }}>Faktisk vandindhold:</strong>{" "}
-                      {fmt1(intersection.faktiskD)} g/m³
-                    </p>
-                    <p>
-                      <strong style={{ color: COL.redText }}>Maksimalt vandindhold:</strong>{" "}
-                      {fmt1(intersection.maksD)} g/m³
-                    </p>
-                    <p>
-                      <strong style={{ color: COL.purple }}>Relativ luftfugtighed:</strong>{" "}
-                      {fmt1(intersection.rhD)} %
-                    </p>
-                  </div>
-
-                  <div className="mt-2 p-1 bg-white border rounded text-xs">
-                    <div className="space-y-1">
-                      <p>
-                        <InlineMath math="\text{RH} = \frac{\text{faktisk indhold}}{\text{maksimalt indhold}}" />
-                      </p>
-                      <p>
-                        <InlineMath
-                          math={`\\text{RH} = \\frac{\\textcolor{#047857}{\\text{${fmt1(
-                            intersection.faktiskD
-                          )} g/m³}}}{\\textcolor{#b91c1c}{\\text{${fmt1(intersection.maksD)} g/m³}}}`}
-                        />
-                      </p>
-                      <p>
-                        <InlineMath math={`\\text{RH} = \\text{${fmt1(intersection.rhD)} \\%}`} />
-                      </p>
-                    </div>
-                  </div>
-                </div>
+          <div className="space-y-4">
+            <div>
+              <label htmlFor="input-temp" className="flex items-center gap-2 text-sm font-medium text-gray-700 mb-1.5">
+                <span className="w-2 h-2 rounded-full" style={{ background: COL.red }} aria-hidden="true"></span>
+                Temperatur (°C)
+              </label>
+              <input
+                id="input-temp"
+                type="text"
+                inputMode="decimal"
+                value={inputTemp}
+                onChange={handleInput(setInputTemp)}
+                placeholder={`${T_MIN} til ${T_MAX} °C`}
+                aria-describedby="temp-help temp-error"
+                className={`w-full px-3 py-2.5 border rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors ${
+                  tempError || pairError ? "border-red-400 bg-red-50" : "border-gray-300"
+                }`}
+              />
+              {tempError && (
+                <p id="temp-error" role="alert" className="text-xs text-red-700 mt-1">
+                  {tempError}
+                </p>
               )}
-
-              {pairError && !intersection && (
-                <div className="mt-3 p-2 bg-yellow-50 border border-yellow-300 rounded-lg" role="alert">
-                  <p className="text-xs text-yellow-900">
-                    <strong>Ugyldig kombination:</strong> {pairError} Ved mætning
-                    er dugpunktet lig med lufttemperaturen (RH = 100 %).
-                  </p>
-                </div>
-              )}
-
-              <p className="mt-4 text-xs text-slate-500">
-                Magnus-formlen (Sonntag90): Ew = α·exp((β·T)/(λ+T)) hvor α=6,112
-                hPa, β=17,62, λ=243,12 °C. RH beregnes som forholdet mellem
-                absolut luftfugtighed ved dugpunktet og ved lufttemperaturen
-                (g/m³); meteorologiens damptryksdefinition giver op til ca. 2
-                procentpoint lavere værdier. Under 0 °C gælder kurven
-                (underafkølet) vand — mætning over is ligger lavere.
+              <p id="temp-help" className="text-xs text-gray-500 mt-1">
+                Rød stiplet streg tegnes fra x-aksen op til kurven
               </p>
-              <p className="mt-2 text-xs text-slate-400 text-center">Philip K. Jakobsen</p>
+            </div>
+
+            <div>
+              <label htmlFor="input-dew" className="flex items-center gap-2 text-sm font-medium text-gray-700 mb-1.5">
+                <span className="w-2 h-2 rounded-full" style={{ background: COL.green }} aria-hidden="true"></span>
+                Dugpunktstemperatur (°C)
+              </label>
+              <input
+                id="input-dew"
+                type="text"
+                inputMode="decimal"
+                value={inputDewPoint}
+                onChange={handleInput(setInputDewPoint)}
+                placeholder={`${T_MIN} til ${T_MAX} °C`}
+                aria-describedby="dew-help dew-error"
+                className={`w-full px-3 py-2.5 border rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors ${
+                  dewRangeError || pairError ? "border-red-400 bg-red-50" : "border-gray-300"
+                }`}
+              />
+              {(dewRangeError || pairError) && (
+                <p id="dew-error" role="alert" className="text-xs text-red-700 mt-1">
+                  {dewRangeError || pairError}
+                </p>
+              )}
+              <p id="dew-help" className="text-xs text-gray-500 mt-1">
+                Grøn prikket streg tegnes op til kurven — sammen med temperaturen
+                vises luftmassens punkt
+              </p>
             </div>
           </div>
+
+          <div className="mt-5 space-y-2">
+            <button
+              onClick={() => setShowUnsaturated(!showUnsaturated)}
+              className="w-full px-3 py-2 rounded-xl border border-gray-300 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+            >
+              {showUnsaturated ? "Skjul umættet område" : "Vis umættet område"}
+            </button>
+
+            {intersection && (
+              <button
+                onClick={showExplanation ? stopExplanation : startExplanation}
+                className={`w-full px-3 py-2 rounded-xl border text-sm transition-colors ${
+                  showExplanation
+                    ? "border-orange-300 text-orange-700 hover:bg-orange-50"
+                    : "border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                }`}
+              >
+                {showExplanation ? "Stop forklaring" : "Forklar beregningen"}
+              </button>
+            )}
+
+            <button
+              onClick={resetAndClear}
+              className="w-full px-3 py-1.5 text-sm text-gray-400 hover:text-red-600 transition-colors"
+            >
+              Ryd og nulstil
+            </button>
+          </div>
         </div>
+
+        {/* Resultatkort — RH er helten */}
+        {intersection && (
+          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-5">
+            <p className="text-xs uppercase tracking-wide text-gray-400 mb-1">
+              Relativ luftfugtighed
+            </p>
+            <p className="text-4xl font-light mb-4" style={{ color: COL.purple }}>
+              {fmt1(intersection.rhD)} %
+            </p>
+
+            <dl className="space-y-2 text-sm">
+              <div className="flex items-center justify-between">
+                <dt className="flex items-center gap-2 text-gray-600">
+                  <span className="w-2 h-2 rounded-full" style={{ background: COL.red }}></span>
+                  Lufttemperatur
+                </dt>
+                <dd className="font-medium text-gray-900">{fmt1(temp)} °C</dd>
+              </div>
+              <div className="flex items-center justify-between">
+                <dt className="flex items-center gap-2 text-gray-600">
+                  <span className="w-2 h-2 rounded-full" style={{ background: COL.green }}></span>
+                  Dugpunkt
+                </dt>
+                <dd className="font-medium text-gray-900">{fmt1(dewPoint)} °C</dd>
+              </div>
+              <div className="flex items-center justify-between">
+                <dt className="flex items-center gap-2 text-gray-600">
+                  <span className="w-2 h-2 rounded-full" style={{ background: COL.green }}></span>
+                  Faktisk vandindhold
+                </dt>
+                <dd className="font-medium text-gray-900">{fmt1(intersection.faktiskD)} g/m³</dd>
+              </div>
+              <div className="flex items-center justify-between">
+                <dt className="flex items-center gap-2 text-gray-600">
+                  <span className="w-2 h-2 rounded-full" style={{ background: COL.red }}></span>
+                  Maksimalt vandindhold
+                </dt>
+                <dd className="font-medium text-gray-900">{fmt1(intersection.maksD)} g/m³</dd>
+              </div>
+            </dl>
+
+            <div className="mt-4 p-3 bg-gray-50 rounded-xl text-sm space-y-1">
+              <p>
+                <InlineMath math="\text{RH} = \frac{\text{faktisk indhold}}{\text{maksimalt indhold}}" />
+              </p>
+              <p>
+                <InlineMath
+                  math={`\\text{RH} = \\frac{\\textcolor{#047857}{\\text{${fmt1(
+                    intersection.faktiskD
+                  )} g/m³}}}{\\textcolor{#b91c1c}{\\text{${fmt1(intersection.maksD)} g/m³}}}`}
+                />
+              </p>
+              <p>
+                <InlineMath math={`\\text{RH} = \\text{${fmt1(intersection.rhD)} \\%}`} />
+              </p>
+            </div>
+          </div>
+        )}
+
+        {pairError && !intersection && (
+          <div className="bg-amber-50 rounded-2xl border border-amber-200 p-4" role="alert">
+            <p className="text-sm text-amber-900">
+              <strong>Ugyldig kombination:</strong> {pairError} Ved mætning er
+              dugpunktet lig med lufttemperaturen (RH = 100 %).
+            </p>
+          </div>
+        )}
+
+        <p className="text-xs text-gray-400 font-light px-1">
+          Magnus-formlen (Sonntag90): Ew = α·exp((β·T)/(λ+T)) hvor α=6,112 hPa,
+          β=17,62, λ=243,12 °C. RH beregnes som forholdet mellem absolut
+          luftfugtighed ved dugpunktet og ved lufttemperaturen (g/m³);
+          meteorologiens damptryksdefinition giver op til ca. 2 procentpoint
+          lavere værdier. Under 0 °C gælder kurven (underafkølet) vand — mætning
+          over is ligger lavere.
+        </p>
       </div>
     </div>
   );

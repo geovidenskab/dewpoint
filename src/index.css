@@ -1,4 +1,9 @@
 @tailwind base;
+
+@keyframes fadein {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
 @tailwind components;
 @tailwind utilities;
 
