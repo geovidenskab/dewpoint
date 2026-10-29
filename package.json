@@ -2,19 +2,17 @@
     "name": "dugpunkt-app",
     "version": "1.0.0",
     "description": "Dugpunktskurve React app",
-    "homepage": "https://geovidenskab.github.io/dewpoint",
+    "homepage": "/dewpoint",
     "main": "index.js",
     "scripts": {
         "start": "react-scripts start",
-        "build": "react-scripts build",
+        "build": "GENERATE_SOURCEMAP=false react-scripts build",
         "test": "react-scripts test",
-        "eject": "react-scripts eject",
-        "predeploy": "npm run build",
-        "deploy": "gh-pages -d build"
+        "eject": "react-scripts eject"
     },
     "dependencies": {
         "katex": "^0.16.22",
-        "plotly.js": "^2.27.0",
+        "plotly.js-basic-dist": "^4.2.0",
         "react": "^18.2.0",
         "react-dom": "^18.2.0",
         "react-katex": "^3.1.0",
@@ -22,8 +20,7 @@
         "react-scripts": "5.0.1"
     },
     "devDependencies": {
-        "tailwindcss": "^3.3.0",
-        "gh-pages": "^6.1.1"
+        "tailwindcss": "^3.3.0"
     },
     "browserslist": {
         "production": [

@@ -1,107 +1,172 @@
-import React, { useMemo, useState, useEffect } from "react";
-import Plot from "react-plotly.js";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import createPlotlyComponent from "react-plotly.js/factory";
+import Plotly from "plotly.js-basic-dist";
 import "katex/dist/katex.min.css";
-import { InlineMath, BlockMath } from "react-katex";
+import { InlineMath } from "react-katex";
 
-// Simpel interaktiv dugpunktskurve
-// - Én kurve styret af en RH-slider
-// - Zoom/pan for at ændre akserne (dobbeltklik for reset)
+const Plot = createPlotlyComponent(Plotly);
+
+// ---------------------------------------------------------------------------
+// Fysik — Magnus-formlen med Sonntag90-konstanter, gyldig -45..60 °C over vand.
+// Under 0 °C gælder kurven (underafkølet) vand, ikke is — standard i meteorologi.
+// ---------------------------------------------------------------------------
+const ALPHA = 6.112; // hPa
+const BETA = 17.62;
+const LAMBDA = 243.12; // °C
+const T_MIN = -45;
+const T_MAX = 60;
+
+function saturationVaporPressure(T) {
+  // Ew = α · exp((β·T)/(λ+T))
+  return ALPHA * Math.exp((BETA * T) / (LAMBDA + T));
+}
+
+function absoluteHumidity(T) {
+  // Idealgas: ρ = e·Mw / (R·Tk), e i Pa, Mw = 18.015 g/mol, R = 8.314 J/(mol·K)
+  const e = saturationVaporPressure(T) * 100;
+  return (e * 18.015) / (8.314 * (T + 273.15));
+}
+
+// ---------------------------------------------------------------------------
+// Formatering — én decimal med dansk komma, og alle viste beregninger laves af
+// de viste (afrundede) tal, så eleven altid kan reproducere regnestykket.
+// ---------------------------------------------------------------------------
+const round1 = (x) => Math.round(x * 10) / 10;
+const fmt1 = (x) => round1(x).toFixed(1).replace(".", ",");
+const parseDa = (s) => parseFloat(String(s).replace(",", "."));
+const INPUT_RE = /^-?\d*[.,]?\d*$/; // tillader at skrive værdien færdig, komma eller punktum
+
+const DEFAULT_ZOOM = { x: [-10, 40], y: [0, 50] };
+
+// Farvesystem: rød = lufttemperatur/maksimalt indhold, grøn = dugpunkt/faktisk
+// indhold, mørkeblå = mætningskurve, lilla = relativ luftfugtighed.
+// Tekstfarverne er mørkere varianter af hensyn til kontrast (WCAG).
+const COL = {
+  curve: "#1e40af",
+  fill: "rgba(59, 130, 246, 0.08)",
+  red: "#ef4444",
+  redText: "#b91c1c",
+  green: "#10b981",
+  greenText: "#047857",
+  dark: "#1f2937",
+  purple: "#7c3aed",
+};
+
 export default function DugpunktskurveApp() {
   const [plotKey, setPlotKey] = useState(0);
   const [inputTemp, setInputTemp] = useState("");
   const [inputDewPoint, setInputDewPoint] = useState("");
-  const [intersectionPoint, setIntersectionPoint] = useState(null);
-  const [currentZoom, setCurrentZoom] = useState({ x: [-10, 40], y: [0, 50] });
+  const [currentZoom, setCurrentZoom] = useState(DEFAULT_ZOOM);
   const [showExplanation, setShowExplanation] = useState(false);
   const [animationStep, setAnimationStep] = useState(0);
-  const [pulseOpacity, setPulseOpacity] = useState(0);
+  const [pulseOpacity, setPulseOpacity] = useState(1);
   const [showUnsaturated, setShowUnsaturated] = useState(true);
 
-  // Tjek og juster zoom når input-værdier ændres
+  // zoomRef spejler currentZoom, så auto-zoomet kan læse den aktuelle værdi
+  // uden at have currentZoom som effect-dependency (ville give zoom-ryk ved pan)
+  const zoomRef = useRef(DEFAULT_ZOOM);
+  const applyZoom = (z) => {
+    zoomRef.current = z;
+    setCurrentZoom(z);
+  };
+
+  // Afledte værdier — ingen setState under render
+  const temp = useMemo(() => {
+    const v = parseDa(inputTemp);
+    return inputTemp !== "" && !isNaN(v) ? v : null;
+  }, [inputTemp]);
+  const dewPoint = useMemo(() => {
+    const v = parseDa(inputDewPoint);
+    return inputDewPoint !== "" && !isNaN(v) ? v : null;
+  }, [inputDewPoint]);
+
+  const tempInRange = temp !== null && temp >= T_MIN && temp <= T_MAX;
+  const dewInRange = dewPoint !== null && dewPoint >= T_MIN && dewPoint <= T_MAX;
+  const pairEntered = tempInRange && dewInRange;
+  // Ét fælles gyldighedstjek, uanset hvilket felt der blev ændret sidst:
+  const pairValid = pairEntered && dewPoint <= temp;
+
+  const intersection = useMemo(() => {
+    if (!pairValid) return null;
+    const maks = absoluteHumidity(temp);
+    const faktisk = absoluteHumidity(dewPoint);
+    const maksD = round1(maks);
+    const faktiskD = round1(faktisk);
+    // RH af de viste tal, så brøken altid giver resultatet
+    const rhD = round1((faktiskD / maksD) * 100);
+    return { maks, faktisk, maksD, faktiskD, rhD };
+  }, [pairValid, temp, dewPoint]);
+
+  // Auto-zoom: kun når et punkt ligger uden for det synlige udsnit, og uden
+  // Plotly-remount (akse-ranges er bundet til currentZoom).
   useEffect(() => {
-    if (
-      inputTemp &&
-      inputDewPoint &&
-      !isNaN(parseFloat(inputTemp)) &&
-      !isNaN(parseFloat(inputDewPoint))
-    ) {
-      const temp = parseFloat(inputTemp);
-      const dewPoint = parseFloat(inputDewPoint);
+    if (!pairValid) return;
+    const tempHum = absoluteHumidity(temp);
+    const dewHum = absoluteHumidity(dewPoint);
+    const z = zoomRef.current;
+    const inView =
+      Math.min(temp, dewPoint) >= z.x[0] &&
+      Math.max(temp, dewPoint) <= z.x[1] &&
+      Math.max(tempHum, dewHum) <= z.y[1];
+    if (inView) return;
 
-      if (temp >= -45 && temp <= 60 && dewPoint >= -45 && dewPoint <= 60) {
-        checkAndAdjustZoom(temp, dewPoint);
-      }
+    const minTemp = Math.min(temp, dewPoint);
+    const maxTemp = Math.max(temp, dewPoint);
+    const maxHum = Math.max(tempHum, dewHum);
+    const tempMargin = Math.max(3, (maxTemp - minTemp) * 0.2);
+    const humMargin = Math.max(1, maxHum * 0.15);
+    applyZoom({
+      x: [Math.max(T_MIN, minTemp - tempMargin), Math.min(T_MAX, maxTemp + tempMargin * 2)],
+      y: [0, maxHum + humMargin],
+    });
+  }, [pairValid, temp, dewPoint]);
+
+  // Puls: kontinuerlig så længe trinnet er aktivt, med oprydning — ingen løse timere
+  useEffect(() => {
+    if (!showExplanation || animationStep === 0) return;
+    setPulseOpacity(1);
+    const id = setInterval(() => {
+      setPulseOpacity((o) => (o === 1 ? 0.35 : 1));
+    }, 600);
+    return () => clearInterval(id);
+  }, [showExplanation, animationStep]);
+
+  // Bliver inputtet ugyldigt midt i en forklaring, stoppes den
+  useEffect(() => {
+    if (!pairValid && showExplanation) {
+      setShowExplanation(false);
+      setAnimationStep(0);
     }
-  }, [inputTemp, inputDewPoint]);
-
-  // Magnus formel parametre fra Sonntag90
-  const alpha = 6.112; // hPa
-  const beta = 17.62;
-  const lambda = 243.12; // °C
-
-  function saturationVaporPressure(T) {
-    // Magnus formel for mætningsdampstryk
-    // Ew = α * exp((β*T)/(λ+T))
-    return alpha * Math.exp((beta * T) / (lambda + T));
-  }
-
-  function absoluteHumidity(T) {
-    // Konverter mætningsdampstryk til absolut luftfugtighed (g/m³)
-    // ρ = (e * Mw) / (R * Tk)
-    // hvor e = dampstryk (Pa), Mw = molær masse vand (18.015 g/mol)
-    // R = universel gaskonstant (8.314 J/(mol·K)), Tk = temperatur i Kelvin
-    const e = saturationVaporPressure(T) * 100; // Konverter hPa til Pa
-    const Mw = 18.015; // g/mol
-    const R = 8.314; // J/(mol·K)
-    const Tk = T + 273.15; // Konverter °C til Kelvin
-
-    return (e * Mw) / (R * Tk);
-  }
-
-  function dewPointC(T, RH) {
-    // Magnus formel for dugpunkt beregning
-    // Dp(T,RH) = λ * (ln(RH/100) + (β*T)/(λ+T)) / (β - (ln(RH/100) + (β*T)/(λ+T)))
-    const gamma = Math.log(RH / 100) + (beta * T) / (lambda + T);
-    return (lambda * gamma) / (beta - gamma);
-  }
-
-  function relativeHumidity(T, Td) {
-    // Beregn relativ luftfugtighed fra temperatur og dugpunkt
-    // RH = 100 * exp((β*Td)/(λ+Td) - (β*T)/(λ+T))
-    const numerator = (beta * Td) / (lambda + Td);
-    const denominator = (beta * T) / (lambda + T);
-    return 100 * Math.exp(numerator - denominator);
-  }
+  }, [pairValid, showExplanation]);
 
   const xs = useMemo(() => {
     const arr = [];
-    for (let t = -45; t <= 60 + 1e-9; t += 0.25)
-      arr.push(parseFloat(t.toFixed(6)));
+    for (let t = T_MIN; t <= T_MAX + 1e-9; t += 0.25) arr.push(parseFloat(t.toFixed(6)));
     return arr;
   }, []);
-
   const ys = useMemo(() => xs.map((T) => absoluteHumidity(T)), [xs]);
 
   const data = useMemo(() => {
+    const zx0 = currentZoom.x[0];
+    const zx1 = currentZoom.x[1];
+    const xRange = zx1 - zx0;
+    const yRange = currentZoom.y[1] - currentZoom.y[0];
+    const clampX = (x) => Math.min(Math.max(x, zx0 + xRange * 0.02), zx1 - xRange * 0.02);
+
     const traces = [
-      // Blå gennemsigtig baggrund for umættet område (kun når aktiveret)
       ...(showUnsaturated
         ? [
             {
-              x: xs, // Brug mætningskurvens x-værdier
-              y: ys, // Brug mætningskurvens y-værdier
+              x: xs,
+              y: ys,
               type: "scatter",
               mode: "lines",
-              fill: "tozeroy", // Fyld området fra kurven ned til y=0
-              fillcolor: "rgba(59, 130, 246, 0.1)", // Mere synlig blå gennemsigtig
-              line: {
-                color: "rgba(59, 130, 246, 0.5)",
-                width: 2,
-              },
+              fill: "tozeroy",
+              fillcolor: COL.fill,
+              line: { width: 0 },
               name: "Umættet",
               showlegend: true,
-              legendgroup: "umættet",
-              hovertemplate: "Umættet område<extra></extra>",
+              hoverinfo: "skip",
             },
           ]
         : []),
@@ -111,552 +176,255 @@ export default function DugpunktskurveApp() {
         type: "scatter",
         mode: "lines",
         name: "Mætningskurve",
-        line: {
-          width: 3,
-          color: "#3b82f6",
-          shape: "spline",
-        },
-        hovertemplate: `T: %{x:.2f} °C<br>Luftfugtighed: %{y:.2f} g/m³<extra></extra>`,
+        line: { width: 3, color: COL.curve },
+        hovertemplate: "T: %{x:.1f} °C<br>Maksimalt vandindhold: %{y:.1f} g/m³<extra></extra>",
       },
     ];
 
-    // Rød vertikal streg fra temperatur input (kun når forklaring ikke er aktiv)
-    if (inputTemp && !isNaN(parseFloat(inputTemp)) && !showExplanation) {
-      const temp = parseFloat(inputTemp);
-      if (temp >= -45 && temp <= 60) {
-        const humidity = absoluteHumidity(temp);
+    // Rød lodret streg ved lufttemperaturen (skjules under forklaringen)
+    if (tempInRange && !showExplanation) {
+      const maks = absoluteHumidity(temp);
+      traces.push({
+        x: [temp, temp],
+        y: [0, maks],
+        type: "scatter",
+        mode: "lines",
+        name: "Lufttemperatur",
+        line: { color: COL.red, width: 2.5, dash: "dash" },
+        showlegend: false,
+        hovertemplate: `T: ${fmt1(temp)} °C<br>Maksimalt vandindhold: ${fmt1(maks)} g/m³<extra></extra>`,
+      });
+    }
+
+    // Grønne dugpunktselementer (skjules under forklaringen)
+    if (dewInRange && !showExplanation) {
+      const faktisk = absoluteHumidity(dewPoint);
+      traces.push({
+        x: [dewPoint, dewPoint],
+        y: [0, faktisk],
+        type: "scatter",
+        mode: "lines",
+        name: "Dugpunkt",
+        line: { color: COL.green, width: 2.5, dash: "dot" },
+        showlegend: false,
+        hovertemplate: `Dugpunkt: ${fmt1(dewPoint)} °C<br>Faktisk vandindhold: ${fmt1(faktisk)} g/m³<extra></extra>`,
+      });
+
+      if (pairValid) {
+        // Vandret grøn streg fra dugpunktet hen til luftmassens punkt
+        traces.push({
+          x: [dewPoint, temp],
+          y: [faktisk, faktisk],
+          type: "scatter",
+          mode: "lines",
+          name: "Faktisk vandindhold",
+          line: { color: COL.green, width: 1.5, dash: "dot" },
+          showlegend: false,
+          hovertemplate: `Faktisk vandindhold: ${fmt1(faktisk)} g/m³<extra></extra>`,
+        });
+      }
+
+      traces.push({
+        x: [dewPoint],
+        y: [faktisk],
+        type: "scatter",
+        mode: "markers",
+        name: "Dugpunktspunkt",
+        marker: { color: COL.green, size: 14, line: { color: "#ffffff", width: 2 } },
+        showlegend: false,
+        hovertemplate: `Dugpunkt: ${fmt1(dewPoint)} °C<br>Faktisk vandindhold: ${fmt1(faktisk)} g/m³<extra></extra>`,
+      });
+
+      traces.push({
+        x: [clampX(dewPoint)],
+        y: [faktisk + yRange * 0.05],
+        type: "scatter",
+        mode: "text",
+        text: ["Dugpunkt"],
+        textposition: "top center",
+        name: "Dugpunkt tekst",
+        textfont: { color: COL.greenText, size: 14, family: "Arial, sans-serif" },
+        showlegend: false,
+        hoverinfo: "skip",
+      });
+    }
+
+    // Sort punkt: luftmassens tilstand (kun ved gyldigt par)
+    if (pairValid && intersection) {
+      traces.push({
+        x: [temp],
+        y: [intersection.faktisk],
+        type: "scatter",
+        mode: "markers",
+        name: "Luftens tilstand",
+        marker: { color: COL.dark, size: 14, line: { color: "#ffffff", width: 2 } },
+        showlegend: false,
+        hovertemplate:
+          `Luftens tilstand<br>T: ${fmt1(temp)} °C · Dugpunkt: ${fmt1(dewPoint)} °C<br>` +
+          `Faktisk vandindhold: ${fmt1(intersection.faktiskD)} g/m³<br>` +
+          `Relativ luftfugtighed: ${fmt1(intersection.rhD)} %<extra></extra>`,
+      });
+    }
+
+    // Forklaringens tre trin
+    if (pairValid && intersection && showExplanation) {
+      const { maks, faktisk, maksD, faktiskD, rhD } = intersection;
+      const textX = zx0 + xRange * 0.02;
+
+      // Trin 1: maksimalt vandindhold ved lufttemperaturen (rød, solid)
+      if (animationStep >= 1) {
         traces.push({
           x: [temp, temp],
-          y: [0, humidity],
+          y: [0, maks],
           type: "scatter",
           mode: "lines",
-          name: "Temperatur streg",
-          line: {
-            color: "#ef4444",
-            width: 2.5,
-            dash: "dash",
-            shape: "linear",
-          },
+          name: "Maksimalt vandindhold",
+          line: { color: COL.red, width: 6, dash: "solid" },
+          opacity: animationStep === 1 ? pulseOpacity : 0.7,
           showlegend: false,
-          hovertemplate: `T: ${temp} °C<br>Luftfugtighed: ${humidity
-            .toFixed(2)
-            .replace(".", ",")} g/m³<extra></extra>`,
-        });
-      }
-    }
-
-    // Grøn streg fra dugpunkt input - først lodret op til kurven, så vandret til venstre (kun når forklaring ikke er aktiv)
-    if (
-      inputDewPoint &&
-      !isNaN(parseFloat(inputDewPoint)) &&
-      !showExplanation
-    ) {
-      const dewPoint = parseFloat(inputDewPoint);
-      if (dewPoint >= -45 && dewPoint <= 60) {
-        const humidity = absoluteHumidity(dewPoint);
-        traces.push({
-          x: [dewPoint, dewPoint], // Lodret streg fra x-akse til kurven
-          y: [0, humidity], // Fra x-akse til kurven
-          type: "scatter",
-          mode: "lines",
-          name: "Dugpunkt streg",
-          line: {
-            color: "#3b82f6",
-            width: 2.5,
-            dash: "dot",
-            shape: "linear",
-          },
-          showlegend: true,
-          legendgroup: "dugpunkt",
-          hovertemplate: `Dugpunkt: ${dewPoint} °C<br>Luftfugtighed: ${humidity
-            .toFixed(2)
-            .replace(".", ",")} g/m³<extra></extra>`,
+          hovertemplate: `Maksimalt vandindhold: ${fmt1(maksD)} g/m³<extra></extra>`,
         });
 
-        // Vandret grøn streg fra dugpunktet til det sorte punkt
-        if (inputTemp && !isNaN(parseFloat(inputTemp))) {
-          const temp = parseFloat(inputTemp);
+        if (animationStep === 1) {
           traces.push({
-            x: [dewPoint, temp], // Kun fra dugpunktet til temperatur
-            y: [humidity, humidity], // Vandret på dugpunktets luftfugtighed
+            x: [textX],
+            y: [maks - yRange * 0.04],
+            type: "scatter",
+            mode: "text",
+            text: [`Maksimalt vandindhold: ${fmt1(maksD)} g/m³`],
+            textposition: "middle right",
+            textfont: { color: COL.redText, size: 16, family: "Arial, sans-serif" },
+            showlegend: false,
+            hoverinfo: "skip",
+          });
+          // Aflæsningsstreg hen til y-aksen (grafens aktuelle venstre kant)
+          traces.push({
+            x: [temp, zx0],
+            y: [maks, maks],
             type: "scatter",
             mode: "lines",
-            name: "Vandret dugpunkt streg",
-            line: {
-              color: "#10b981", // Grøn farve
-              width: 1.5,
-              dash: "dot",
-              shape: "linear",
-            },
+            line: { color: COL.red, width: 3, dash: "dot" },
+            opacity: pulseOpacity,
             showlegend: false,
-            hovertemplate: `Vandret streg: ${humidity
-              .toFixed(2)
-              .replace(".", ",")} g/m³<extra></extra>`,
+            hoverinfo: "skip",
           });
         }
+      }
 
-        // Blå cirkel ved dugpunktet
+      // Trin 2: faktisk vandindhold (grøn, stiplet — kan skelnes fra rød uden farvesyn)
+      if (animationStep >= 2) {
+        traces.push({
+          x: [temp, temp],
+          y: [0, faktisk],
+          type: "scatter",
+          mode: "lines",
+          name: "Faktisk vandindhold",
+          line: { color: COL.green, width: 6, dash: "dash" },
+          opacity: animationStep === 2 ? pulseOpacity : 0.7,
+          showlegend: false,
+          hovertemplate: `Faktisk vandindhold: ${fmt1(faktiskD)} g/m³<extra></extra>`,
+        });
+
+        if (animationStep === 2) {
+          traces.push({
+            x: [dewPoint],
+            y: [faktisk],
+            type: "scatter",
+            mode: "markers",
+            marker: { color: COL.green, size: 20, line: { color: "#ffffff", width: 3 }, opacity: pulseOpacity },
+            showlegend: false,
+            hovertemplate: `Dugpunkt: ${fmt1(dewPoint)} °C<br>Faktisk vandindhold: ${fmt1(faktiskD)} g/m³<extra></extra>`,
+          });
+          traces.push({
+            x: [textX],
+            y: [faktisk - yRange * 0.04],
+            type: "scatter",
+            mode: "text",
+            text: [`Faktisk vandindhold: ${fmt1(faktiskD)} g/m³`],
+            textposition: "middle right",
+            textfont: { color: COL.greenText, size: 16, family: "Arial, sans-serif" },
+            showlegend: false,
+            hoverinfo: "skip",
+          });
+          traces.push({
+            x: [temp, zx0],
+            y: [faktisk, faktisk],
+            type: "scatter",
+            mode: "lines",
+            line: { color: COL.green, width: 3, dash: "dot" },
+            opacity: pulseOpacity,
+            showlegend: false,
+            hoverinfo: "skip",
+          });
+        }
+      }
+
+      // Trin 3: beregningen — samme afrundede tal som boksen, så alt stemmer
+      if (animationStep === 3) {
+        traces.push({
+          x: [textX],
+          y: [maks / 2],
+          type: "scatter",
+          mode: "text",
+          text: [`RH = ${fmt1(faktiskD)} g/m³ / ${fmt1(maksD)} g/m³ = ${fmt1(rhD)} %`],
+          textposition: "middle right",
+          textfont: { color: COL.purple, size: 16, family: "Arial, sans-serif" },
+          showlegend: false,
+          hoverinfo: "skip",
+        });
         traces.push({
           x: [dewPoint],
-          y: [humidity],
+          y: [faktisk],
           type: "scatter",
           mode: "markers",
-          name: "Dugpunkt",
-          marker: {
-            color: "#3b82f6",
-            size: 14,
-            line: {
-              color: "#ffffff",
-              width: 2,
-            },
-          },
+          marker: { color: COL.green, size: 25, line: { color: "#ffffff", width: 4 }, opacity: pulseOpacity },
           showlegend: false,
-          hovertemplate: `Dugpunkt: ${dewPoint} °C<br>Luftfugtighed: ${humidity
-            .toFixed(2)
-            .replace(".", ",")} g/m³<extra></extra>`,
+          hovertemplate: `Faktisk vandindhold: ${fmt1(faktiskD)} g/m³<extra></extra>`,
         });
-
-        // Tekst "Dugpunkt" ved cirklen
         traces.push({
-          x: [dewPoint], // Centreret over cirklen
-          y: [humidity + 1.5], // 1.5 g/m³ over cirklen
+          x: [clampX(dewPoint - xRange * 0.1)],
+          y: [faktisk],
           type: "scatter",
           mode: "text",
-          text: ["Dugpunkt"],
-          textposition: "top center",
-          name: "Dugpunkt tekst",
-          textfont: {
-            color: "#1e40af", // Mørkere blå for bedre synlighed
-            size: 14,
-            family: "Arial, sans-serif",
-            weight: "bold",
-          },
+          text: [`${fmt1(faktiskD)} g/m³`],
+          textposition: "middle left",
+          textfont: { color: COL.greenText, size: 14, family: "Arial, sans-serif" },
           showlegend: false,
-          hovertemplate: "Dugpunkt<extra></extra>",
+          hoverinfo: "skip",
         });
-      }
-    }
-
-    // Sort cirkel ved krydsningspunkt
-    if (
-      inputTemp &&
-      inputDewPoint &&
-      !isNaN(parseFloat(inputTemp)) &&
-      !isNaN(parseFloat(inputDewPoint))
-    ) {
-      const temp = parseFloat(inputTemp);
-      const dewPoint = parseFloat(inputDewPoint);
-
-      // Kun vis krydsningspunkt hvis begge værdier er inden for gyldigt område
-      if (temp >= -45 && temp <= 60 && dewPoint >= -45 && dewPoint <= 60) {
-        const tempHumidity = absoluteHumidity(temp);
-        const dewPointHumidity = absoluteHumidity(dewPoint);
-
-        // Find krydsningspunkt mellem de to streger
-        const intersectionX = temp; // Rød streg er vertikal ved temperatur
-        const intersectionY = dewPointHumidity; // Grøn streg er horisontal ved dugpunktets luftfugtighed
-
-        // Beregn RH som forholdet mellem faktisk og maksimalt vandindhold
-        const rh = (dewPointHumidity / tempHumidity) * 100;
-        setIntersectionPoint({
-          temperature: temp,
-          dewPoint: dewPoint,
-          humidity: dewPointHumidity,
-          relativeHumidity: rh,
-        });
-
         traces.push({
-          x: [intersectionX],
-          y: [intersectionY],
+          x: [temp],
+          y: [maks],
           type: "scatter",
           mode: "markers",
-          name: "Krydsningspunkt",
-          marker: {
-            color: "#1f2937",
-            size: 14,
-            line: {
-              color: "#ffffff",
-              width: 2,
-            },
-          },
+          marker: { color: COL.red, size: 25, line: { color: "#ffffff", width: 4 }, opacity: pulseOpacity },
           showlegend: false,
-          hovertemplate: `Krydsningspunkt<br>T: ${temp} °C<br>Dugpunkt: ${dewPoint} °C<br>Luftfugtighed: ${dewPointHumidity
-            .toFixed(2)
-            .replace(".", ",")} g/m³<br>RH: ${rh
-            .toFixed(1)
-            .replace(".", ",")}%<extra></extra>`,
+          hovertemplate: `Maksimalt vandindhold: ${fmt1(maksD)} g/m³<extra></extra>`,
         });
-
-        // Signatur ved den sorte cirkel
-        const xRange = currentZoom.x[1] - currentZoom.x[0];
-        const luftmassenOffset = xRange * 0.05; // 5% af synlig x-range
         traces.push({
-          x: [intersectionX + luftmassenOffset], // Dynamisk afstand til højre for cirklen
-          y: [intersectionY], // Samme højde som cirklen
+          x: [clampX(temp - xRange * 0.1)],
+          y: [maks],
           type: "scatter",
           mode: "text",
-          text: ["Luftmassen"],
-          textposition: "middle right",
-          name: "Luftmassen tekst",
-          textfont: {
-            color: "#1f2937", // Mørk grå for god synlighed
-            size: 14,
-            family: "Arial, sans-serif",
-            weight: "bold",
-          },
+          text: [`${fmt1(maksD)} g/m³`],
+          textposition: "middle left",
+          textfont: { color: COL.redText, size: 14, family: "Arial, sans-serif" },
           showlegend: false,
-          hovertemplate: "Luftmassen<extra></extra>",
+          hoverinfo: "skip",
         });
-
-        // Pædagogiske forklaringslinjer med pulserende effekt
-        if (showExplanation) {
-          console.log(
-            "showExplanation:",
-            showExplanation,
-            "animationStep:",
-            animationStep,
-            "pulseOpacity:",
-            pulseOpacity
-          );
-          // Trin 1: Vis maksimalt vandindhold ved lufttemperaturen
-          if (animationStep >= 1) {
-            traces.push({
-              x: [temp, temp],
-              y: [0, tempHumidity],
-              type: "scatter",
-              mode: "lines",
-              name: "Maksimalt vandindhold",
-              line: {
-                color: "#dc2626",
-                width: 6,
-                dash: "solid",
-              },
-              opacity: animationStep === 1 ? pulseOpacity : 0.7,
-              showlegend: false,
-              hovertemplate: `Maksimalt vandindhold: ${tempHumidity
-                .toFixed(1)
-                .replace(".", ",")} g/m³<extra></extra>`,
-            });
-
-            // Værdi og begreb ved dugpunktkurven (dynamisk positionering)
-            if (animationStep === 1) {
-              const xRange = currentZoom.x[1] - currentZoom.x[0];
-              const textOffset = xRange * 0.02; // 2% af synlig x-range
-              const step1TextX = Math.min(
-                currentZoom.x[0] + textOffset,
-                Math.min(temp, dewPoint) - xRange * 0.04
-              ); // Tættere på linjen, undgå legend
-              traces.push({
-                x: [step1TextX], // Dynamisk x-værdi baseret på zoom
-                y: [tempHumidity - 1], // Under den røde streg, undgå legend
-                type: "scatter",
-                mode: "text",
-                text: [
-                  `Maksimalt vandindhold: ${tempHumidity
-                    .toFixed(1)
-                    .replace(".", ",")} g/m³`,
-                ],
-                textposition: "middle right", // Tekst justeret til højre af punktet
-                name: "Maksimalt vandindhold værdi",
-                textfont: {
-                  color: "#dc2626",
-                  size: 16,
-                  family: "Arial, sans-serif",
-                },
-                showlegend: false,
-                hovertemplate: `Maksimalt vandindhold: ${tempHumidity
-                  .toFixed(1)
-                  .replace(".", ",")} g/m³<extra></extra>`,
-              });
-
-              // Blinkende streg til y-aksen
-              traces.push({
-                x: [temp, -10],
-                y: [tempHumidity, tempHumidity],
-                type: "scatter",
-                mode: "lines",
-                name: "Blinkende streg til y-akse",
-                line: {
-                  color: "#dc2626",
-                  width: 3,
-                  dash: "dot",
-                },
-                opacity: pulseOpacity,
-                showlegend: false,
-                hovertemplate: `Maksimalt vandindhold: ${tempHumidity
-                  .toFixed(1)
-                  .replace(".", ",")} g/m³<extra></extra>`,
-              });
-            }
-          }
-
-          // Trin 2: Vis faktisk vandindhold og dugpunkt
-          if (animationStep >= 2) {
-            // Grøn linje op til den sorte cirkel
-            traces.push({
-              x: [temp, temp],
-              y: [0, dewPointHumidity],
-              type: "scatter",
-              mode: "lines",
-              name: "Faktisk vandindhold",
-              line: {
-                color: "#10b981",
-                width: 6,
-                dash: "solid",
-              },
-              opacity: animationStep === 2 ? pulseOpacity : 0.7,
-              showlegend: false,
-              hovertemplate: `Faktisk vandindhold: ${dewPointHumidity
-                .toFixed(1)
-                .replace(".", ",")} g/m³<extra></extra>`,
-            });
-
-            // Grøn prik ved dugpunktet
-            if (animationStep === 2) {
-              traces.push({
-                x: [dewPoint],
-                y: [dewPointHumidity],
-                type: "scatter",
-                mode: "markers",
-                name: "Dugpunkt",
-                marker: {
-                  color: "#10b981",
-                  size: 20,
-                  line: { color: "#ffffff", width: 3 },
-                  opacity: pulseOpacity,
-                },
-                showlegend: false,
-                hovertemplate: `Dugpunkt: ${dewPoint} °C<br>Luftfugtighed: ${dewPointHumidity
-                  .toFixed(1)
-                  .replace(".", ",")} g/m³<extra></extra>`,
-              });
-
-              // Blå cirkel ved dugpunktet (beholdes under forklaring)
-              traces.push({
-                x: [dewPoint],
-                y: [dewPointHumidity],
-                type: "scatter",
-                mode: "markers",
-                name: "Dugpunkt cirkel",
-                marker: {
-                  color: "#3b82f6",
-                  size: 12,
-                  line: {
-                    color: "#ffffff",
-                    width: 2,
-                  },
-                },
-                showlegend: false,
-                hovertemplate: `Dugpunkt: ${dewPoint} °C<br>Luftfugtighed: ${dewPointHumidity
-                  .toFixed(1)
-                  .replace(".", ",")} g/m³<extra></extra>`,
-              });
-            }
-
-            // Værdi og begreb ved krydset (dynamisk positionering)
-            if (animationStep === 2) {
-              const xRange = currentZoom.x[1] - currentZoom.x[0];
-              const textOffset = xRange * 0.02; // 2% af synlig x-range
-              const step2TextX = Math.min(
-                currentZoom.x[0] + textOffset,
-                Math.min(temp, dewPoint) - xRange * 0.04
-              ); // Tættere på linjen, undgå legend
-              traces.push({
-                x: [step2TextX], // Dynamisk x-værdi baseret på zoom
-                y: [dewPointHumidity - 1], // Under den grønne streg, undgå legend
-                type: "scatter",
-                mode: "text",
-                text: [
-                  `Faktisk vandindhold: ${dewPointHumidity
-                    .toFixed(1)
-                    .replace(".", ",")} g/m³`,
-                ],
-                textposition: "middle right", // Tekst justeret til højre af punktet
-                name: "Faktisk vandindhold værdi",
-                textfont: {
-                  color: "#10b981",
-                  size: 16,
-                  family: "Arial, sans-serif",
-                },
-                showlegend: false,
-                hovertemplate: `Faktisk vandindhold: ${dewPointHumidity
-                  .toFixed(1)
-                  .replace(".", ",")} g/m³<extra></extra>`,
-              });
-
-              // Blinkende streg til y-aksen
-              traces.push({
-                x: [temp, -10],
-                y: [dewPointHumidity, dewPointHumidity],
-                type: "scatter",
-                mode: "lines",
-                name: "Blinkende streg til y-akse",
-                line: {
-                  color: "#10b981",
-                  width: 3,
-                  dash: "dot",
-                },
-                opacity: pulseOpacity,
-                showlegend: false,
-                hovertemplate: `Faktisk vandindhold: ${dewPointHumidity
-                  .toFixed(1)
-                  .replace(".", ",")} g/m³<extra></extra>`,
-              });
-            }
-          }
-
-          // Trin 3: Vis beregning og resultat
-          if (animationStep >= 3) {
-            // Beregningsformel ved kurven i trin 3
-            if (animationStep === 3) {
-              // Placér formlen dynamisk baseret på zoom-niveau
-              const xRange = currentZoom.x[1] - currentZoom.x[0];
-              const textOffset = xRange * 0.02; // 2% af synlig x-range
-              const formelX = Math.min(
-                currentZoom.x[0] + textOffset,
-                Math.min(temp, dewPoint) - xRange * 0.04
-              ); // Tættere på linjen, undgå legend
-              const midY = tempHumidity / 2; // Halvvejs ned ad y-aksen fra det maksimale
-
-              // Beregn RH som forholdet mellem faktisk og maksimalt vandindhold
-              const calculatedRH = (dewPointHumidity / tempHumidity) * 100;
-
-              traces.push({
-                x: [formelX],
-                y: [midY], // Placeret ved midtpunktet, undgå legend
-
-                type: "scatter",
-                mode: "text",
-                text: [
-                  `RH = ${dewPointHumidity
-                    .toFixed(1)
-                    .replace(".", ",")} g/m³ / ${tempHumidity
-                    .toFixed(1)
-                    .replace(".", ",")} g/m³ = ${calculatedRH
-                    .toFixed(1)
-                    .replace(".", ",")}%`,
-                ],
-                textposition: "middle right",
-                name: "Beregningsformel",
-                textfont: {
-                  color: "#7c3aed",
-                  size: 16,
-                  family: "Arial, sans-serif",
-                  weight: "bold",
-                },
-                showlegend: false,
-                hovertemplate: `Beregning: ${dewPointHumidity
-                  .toFixed(1)
-                  .replace(".", ",")} g/m³ / ${tempHumidity
-                  .toFixed(1)
-                  .replace(".", ",")} g/m³ = ${calculatedRH
-                  .toFixed(1)
-                  .replace(".", ",")}%<extra></extra>`,
-              });
-            }
-
-            // Pulserende punkt ved dugpunkt (faktisk indhold)
-            if (animationStep === 3) {
-              traces.push({
-                x: [dewPoint],
-                y: [dewPointHumidity],
-                type: "scatter",
-                mode: "markers",
-                name: "Faktisk indhold",
-                marker: {
-                  color: "#10b981",
-                  size: 25,
-                  line: { color: "#ffffff", width: 4 },
-                  opacity: pulseOpacity,
-                },
-                showlegend: false,
-                hovertemplate: `Faktisk indhold (ved dugpunkt): ${dewPointHumidity
-                  .toFixed(1)
-                  .replace(".", ",")} g/m³<extra></extra>`,
-              });
-
-              // Værdi ved den grønne cirkel (dynamisk positionering)
-              const xRange = currentZoom.x[1] - currentZoom.x[0];
-              const greenTextX = dewPoint - xRange * 0.1; // Længere til venstre for cirklen
-              traces.push({
-                x: [greenTextX],
-                y: [dewPointHumidity],
-                type: "scatter",
-                mode: "text",
-                text: [`${dewPointHumidity.toFixed(1).replace(".", ",")} g/m³`],
-                textposition: "middle right",
-                name: "Faktisk indhold værdi",
-                textfont: {
-                  color: "#10b981",
-                  size: 14,
-                  family: "Arial, sans-serif",
-                  weight: "bold",
-                },
-                showlegend: false,
-                hovertemplate: `Faktisk indhold: ${dewPointHumidity
-                  .toFixed(1)
-                  .replace(".", ",")} g/m³<extra></extra>`,
-              });
-            }
-
-            // Pulserende punkt ved temperatur (maksimalt indhold)
-            if (animationStep === 3) {
-              traces.push({
-                x: [temp],
-                y: [tempHumidity],
-                type: "scatter",
-                mode: "markers",
-                name: "Maksimalt indhold",
-                marker: {
-                  color: "#dc2626",
-                  size: 25,
-                  line: { color: "#ffffff", width: 4 },
-                  opacity: pulseOpacity,
-                },
-                showlegend: false,
-                hovertemplate: `Maksimalt indhold (ved temperatur): ${tempHumidity
-                  .toFixed(1)
-                  .replace(".", ",")} g/m³<extra></extra>`,
-              });
-
-              // Værdi ved den røde cirkel (dynamisk positionering)
-              const xRange = currentZoom.x[1] - currentZoom.x[0];
-              const redTextX = temp - xRange * 0.1; // Længere til venstre for cirklen
-              traces.push({
-                x: [redTextX],
-                y: [tempHumidity],
-                type: "scatter",
-                mode: "text",
-                text: [`${tempHumidity.toFixed(1).replace(".", ",")} g/m³`],
-                textposition: "middle right",
-                name: "Maksimalt indhold værdi",
-                textfont: {
-                  color: "#dc2626",
-                  size: 14,
-                  family: "Arial, sans-serif",
-                  weight: "bold",
-                },
-                showlegend: false,
-                hovertemplate: `Maksimalt indhold: ${tempHumidity
-                  .toFixed(1)
-                  .replace(".", ",")} g/m³<extra></extra>`,
-              });
-            }
-          }
-        }
-      } else {
-        setIntersectionPoint(null);
       }
-    } else {
-      setIntersectionPoint(null);
     }
 
     return traces;
   }, [
     xs,
     ys,
-    inputTemp,
-    inputDewPoint,
+    temp,
+    dewPoint,
+    tempInRange,
+    dewInRange,
+    pairValid,
+    intersection,
     showExplanation,
     animationStep,
     pulseOpacity,
@@ -665,21 +433,8 @@ export default function DugpunktskurveApp() {
   ]);
 
   const layout = {
-    title: {
-      text: "LUFTENS MÆTNINGSKURVE",
-      font: { size: 20, color: "#1f2937" },
-      x: 0.5,
-      xanchor: "center",
-    },
     xaxis: {
-      title: {
-        text: "Temperatur i °C",
-        font: { size: 14, color: "#374151" },
-      },
-      tickmode: "linear",
-      dtick: 2,
-      tick0: -10,
-      tickangle: 0,
+      title: { text: "Temperatur i °C", font: { size: 14, color: "#374151" } },
       range: currentZoom.x,
       gridcolor: "#e5e7eb",
       zerolinecolor: "#d1d5db",
@@ -688,14 +443,7 @@ export default function DugpunktskurveApp() {
       tickfont: { size: 12, color: "#6b7280" },
     },
     yaxis: {
-      title: {
-        text: "Luftfugtighed i g vanddamp / m³ luft",
-        font: { size: 14, color: "#374151" },
-      },
-      tickmode: "linear",
-      dtick: 2,
-      tick0: 0,
-      tickangle: 0,
+      title: { text: "Absolut luftfugtighed (g vanddamp/m³)", font: { size: 14, color: "#374151" } },
       rangemode: "tozero",
       range: currentZoom.y,
       gridcolor: "#e5e7eb",
@@ -704,11 +452,11 @@ export default function DugpunktskurveApp() {
       linecolor: "#d1d5db",
       tickfont: { size: 12, color: "#6b7280" },
     },
-    margin: { l: 80, r: 20, t: 60, b: 50 },
+    separators: ",.", // dansk komma i alle Plotly-formaterede tal (hover og aksetal)
+    margin: { l: 80, r: 20, t: 20, b: 50 },
     hovermode: "closest",
     dragmode: "zoom",
     autosize: true,
-    height: Math.max(500, window.innerHeight * 0.7),
     plot_bgcolor: "white",
     paper_bgcolor: "white",
     showlegend: true,
@@ -746,129 +494,93 @@ export default function DugpunktskurveApp() {
   };
 
   const resetAndClear = () => {
-    setPlotKey((k) => k + 1); // Nulstil visning
-    setInputTemp(""); // Ryd temperatur input
-    setInputDewPoint(""); // Ryd dugpunkt input
-    stopExplanationAnimation(); // Stop forklaring hvis aktiv
-  };
-
-  const checkAndAdjustZoom = (temp, dewPoint) => {
-    // Beregn luftfugtigheder
-    const tempHumidity = absoluteHumidity(temp);
-    const dewPointHumidity = absoluteHumidity(dewPoint);
-    const maxHumidity = Math.max(tempHumidity, dewPointHumidity);
-    const minHumidity = Math.min(tempHumidity, dewPointHumidity);
-
-    // Find min og max temperaturer
-    const minTemp = Math.min(temp, dewPoint);
-    const maxTemp = Math.max(temp, dewPoint);
-
-    // Beregn passende zoom-interval med mindre aggressive margener
-    const tempMargin = Math.max(3, (maxTemp - minTemp) * 0.2); // Mindst 3°C margin, eller 20% af temperaturspændet
-    const humidityMargin = Math.max(1, (maxHumidity - minHumidity) * 0.2); // Mindst 1 g/m³ margin, eller 20% af fugtighedsspændet
-
-    // Sæt nye zoom-grænser med ekstra plads til højre for forklaringstekst
-    const newZoom = {
-      x: [
-        Math.max(-45, minTemp - tempMargin), // Mindre plads til lavere temperaturer
-        Math.min(60, maxTemp + tempMargin * 2), // Ekstra plads til højre for forklaringstekst
-      ],
-      y: [
-        0, // Start altid fra 0 g/m³
-        maxHumidity + humidityMargin,
-      ],
-    };
-
-    // Opdater zoom kun hvis det er væsentligt anderledes
-    const xRangeChanged =
-      Math.abs(
-        newZoom.x[1] - newZoom.x[0] - (currentZoom.x[1] - currentZoom.x[0])
-      ) > 1;
-    const yRangeChanged = Math.abs(newZoom.y[1] - currentZoom.y[1]) > 0.5;
-
-    if (xRangeChanged || yRangeChanged) {
-      setCurrentZoom(newZoom);
-      setPlotKey((k) => k + 1); // Genopret graf
-    }
-  };
-
-  const startExplanationAnimation = () => {
-    setShowExplanation(true);
-    setAnimationStep(1);
-    startPulseAnimation();
-  };
-
-  const nextAnimationStep = () => {
-    if (animationStep < 3) {
-      setAnimationStep(animationStep + 1);
-      startPulseAnimation();
-    }
-  };
-
-  const previousAnimationStep = () => {
-    if (animationStep > 1) {
-      setAnimationStep(animationStep - 1);
-      startPulseAnimation();
-    }
-  };
-
-  const startPulseAnimation = () => {
-    console.log("Starting pulse animation");
-    setPulseOpacity(1);
-    setTimeout(() => {
-      console.log("Pulse opacity: 0.3");
-      setPulseOpacity(0.3);
-    }, 500);
-    setTimeout(() => {
-      console.log("Pulse opacity: 1.0");
-      setPulseOpacity(1);
-    }, 1000);
-    setTimeout(() => {
-      console.log("Pulse opacity: 0.3");
-      setPulseOpacity(0.3);
-    }, 1500);
-    setTimeout(() => {
-      console.log("Pulse opacity: 1.0");
-      setPulseOpacity(1);
-    }, 2000);
-  };
-
-  const stopExplanationAnimation = () => {
+    setInputTemp("");
+    setInputDewPoint("");
     setShowExplanation(false);
     setAnimationStep(0);
-    setPulseOpacity(0);
+    applyZoom(DEFAULT_ZOOM);
+    setPlotKey((k) => k + 1);
   };
+
+  const startExplanation = () => {
+    setShowExplanation(true);
+    setAnimationStep(1);
+  };
+  const stopExplanation = () => {
+    setShowExplanation(false);
+    setAnimationStep(0);
+  };
+
+  const handleInput = (setter) => (e) => {
+    const value = e.target.value;
+    if (value === "" || INPUT_RE.test(value)) setter(value);
+  };
+
+  const tempError =
+    inputTemp !== "" && inputTemp !== "-" && temp !== null && !tempInRange
+      ? `Temperatur skal være mellem ${T_MIN} °C og ${T_MAX} °C`
+      : null;
+  const dewRangeError =
+    inputDewPoint !== "" && inputDewPoint !== "-" && dewPoint !== null && !dewInRange
+      ? `Dugpunkt skal være mellem ${T_MIN} °C og ${T_MAX} °C`
+      : null;
+  const pairError =
+    pairEntered && !pairValid
+      ? "Dugpunktet kan ikke være højere end lufttemperaturen — ret et af felterne."
+      : null;
 
   return (
     <div className="min-h-screen bg-white text-slate-800">
       <div className="max-w-7xl mx-auto p-4">
-        <h1 className="text-2xl font-semibold mb-4">LUFTENS MÆTNINGSKURVE</h1>
+        <h1 className="text-2xl font-semibold mb-4">Luftens mætningskurve</h1>
 
         <div className="flex flex-col lg:flex-row gap-6">
-          {/* Venstre side - Kontrolpanel */}
-          <div className="lg:w-80 flex-shrink-0">
+          {/* Graf — øverst på mobil, til højre på desktop */}
+          <div className="flex-1 order-1 lg:order-2">
+            <div className="rounded-xl border">
+              <Plot
+                key={plotKey}
+                data={data}
+                layout={layout}
+                style={{ width: "100%", height: "70vh", minHeight: 400 }}
+                config={config}
+                useResizeHandler
+                onRelayout={(eventData) => {
+                  if (
+                    eventData["xaxis.range[0]"] !== undefined &&
+                    eventData["xaxis.range[1]"] !== undefined &&
+                    eventData["yaxis.range[0]"] !== undefined &&
+                    eventData["yaxis.range[1]"] !== undefined
+                  ) {
+                    applyZoom({
+                      x: [eventData["xaxis.range[0]"], eventData["xaxis.range[1]"]],
+                      y: [eventData["yaxis.range[0]"], eventData["yaxis.range[1]"]],
+                    });
+                  }
+                }}
+              />
+            </div>
+          </div>
+
+          {/* Kontrolpanel */}
+          <div className="lg:w-80 flex-shrink-0 order-2 lg:order-1">
             <div className="p-4 border rounded-xl bg-gray-50 h-fit">
               <p className="text-sm text-slate-600 mb-4">
                 Mætningskurven viser den maksimale mængde vanddamp (g/m³) som
                 luften kan indeholde ved forskellige temperaturer.
               </p>
 
-              {/* Animation menu over beregningsboksen */}
-              {intersectionPoint && showExplanation && (
+              {intersection && showExplanation && (
                 <div className="mb-3 p-2 bg-yellow-50 border border-yellow-200 rounded-lg">
                   <div className="flex items-center mb-2">
-                    <h4 className="font-semibold text-yellow-800 text-base">
-                      Forklaring:
-                    </h4>
+                    <h4 className="font-semibold text-yellow-800 text-base">Forklaring:</h4>
                     <span
                       className={`font-semibold text-sm ml-2 ${
                         animationStep === 1
-                          ? "text-red-600"
+                          ? "text-red-700"
                           : animationStep === 2
-                          ? "text-green-600"
-                          : animationStep === 3
-                          ? "text-purple-600"
-                          : "text-yellow-800"
+                          ? "text-emerald-700"
+                          : "text-purple-700"
                       }`}
                     >
                       {animationStep === 1 && "Trin 1: Maksimalt vandindhold"}
@@ -877,25 +589,13 @@ export default function DugpunktskurveApp() {
                     </span>
                   </div>
                   <div className="flex space-x-1 mb-2">
-                    <div
-                      className={`h-1.5 flex-1 rounded ${
-                        animationStep >= 1 ? "bg-red-500" : "bg-gray-200"
-                      }`}
-                    ></div>
-                    <div
-                      className={`h-1.5 flex-1 rounded ${
-                        animationStep >= 2 ? "bg-green-500" : "bg-gray-200"
-                      }`}
-                    ></div>
-                    <div
-                      className={`h-1.5 flex-1 rounded ${
-                        animationStep >= 3 ? "bg-purple-500" : "bg-gray-200"
-                      }`}
-                    ></div>
+                    <div className={`h-1.5 flex-1 rounded ${animationStep >= 1 ? "bg-red-500" : "bg-gray-200"}`}></div>
+                    <div className={`h-1.5 flex-1 rounded ${animationStep >= 2 ? "bg-emerald-500" : "bg-gray-200"}`}></div>
+                    <div className={`h-1.5 flex-1 rounded ${animationStep >= 3 ? "bg-purple-500" : "bg-gray-200"}`}></div>
                   </div>
                   <div className="flex space-x-2">
                     <button
-                      onClick={previousAnimationStep}
+                      onClick={() => setAnimationStep((s) => Math.max(1, s - 1))}
                       disabled={animationStep <= 1}
                       className={`px-2 py-1 text-xs rounded ${
                         animationStep <= 1
@@ -906,12 +606,12 @@ export default function DugpunktskurveApp() {
                       ← Forrige
                     </button>
                     <button
-                      onClick={nextAnimationStep}
+                      onClick={() => setAnimationStep((s) => Math.min(3, s + 1))}
                       disabled={animationStep >= 3}
                       className={`px-2 py-1 text-xs rounded ${
                         animationStep >= 3
                           ? "bg-gray-100 text-gray-400 cursor-not-allowed"
-                          : "bg-green-100 text-green-700 hover:bg-green-200"
+                          : "bg-emerald-100 text-emerald-700 hover:bg-emerald-200"
                       }`}
                     >
                       Næste →
@@ -922,113 +622,55 @@ export default function DugpunktskurveApp() {
 
               <div className="space-y-4 mb-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label htmlFor="input-temp" className="block text-sm font-medium text-gray-700 mb-2">
                     Temperatur (°C)
                   </label>
                   <input
-                    type="number"
+                    id="input-temp"
+                    type="text"
+                    inputMode="decimal"
                     value={inputTemp}
-                    onChange={(e) => {
-                      const value = e.target.value;
-                      if (value === "" || value === "-") {
-                        setInputTemp(value);
-                      } else {
-                        const numValue = parseFloat(value);
-                        if (
-                          !isNaN(numValue) &&
-                          numValue >= -45 &&
-                          numValue <= 60
-                        ) {
-                          setInputTemp(value);
-                        }
-                      }
-                    }}
-                    placeholder="Indtast temperatur (-45 til 60°C)"
+                    onChange={handleInput(setInputTemp)}
+                    placeholder={`Indtast temperatur (${T_MIN} til ${T_MAX} °C)`}
+                    aria-describedby="temp-help temp-error"
                     className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                      inputTemp &&
-                      inputTemp !== "" &&
-                      inputTemp !== "-" &&
-                      (parseFloat(inputTemp) < -45 ||
-                        parseFloat(inputTemp) > 60)
-                        ? "border-red-500 bg-red-50"
-                        : "border-gray-300"
+                      tempError || pairError ? "border-red-500 bg-red-50" : "border-gray-300"
                     }`}
-                    step="0.1"
-                    min="-45"
-                    max="60"
                   />
-                  {inputTemp &&
-                    inputTemp !== "" &&
-                    inputTemp !== "-" &&
-                    (parseFloat(inputTemp) < -45 ||
-                      parseFloat(inputTemp) > 60) && (
-                      <p className="text-xs text-red-600 mt-1">
-                        Temperatur skal være mellem -45°C og 60°C
-                      </p>
-                    )}
-                  <p className="text-xs text-gray-500 mt-1">
-                    Rød streg tegnes fra x-aksen op til kurven
+                  {tempError && (
+                    <p id="temp-error" role="alert" className="text-xs text-red-700 mt-1">
+                      {tempError}
+                    </p>
+                  )}
+                  <p id="temp-help" className="text-xs text-gray-600 mt-1">
+                    Rød stiplet streg tegnes fra x-aksen op til kurven
                   </p>
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label htmlFor="input-dew" className="block text-sm font-medium text-gray-700 mb-2">
                     Dugpunktstemperatur (°C)
                   </label>
                   <input
-                    type="number"
+                    id="input-dew"
+                    type="text"
+                    inputMode="decimal"
                     value={inputDewPoint}
-                    onChange={(e) => {
-                      const value = e.target.value;
-                      if (value === "" || value === "-") {
-                        setInputDewPoint(value);
-                      } else {
-                        const numValue = parseFloat(value);
-                        const tempValue = inputTemp
-                          ? parseFloat(inputTemp)
-                          : null;
-                        if (
-                          !isNaN(numValue) &&
-                          numValue >= -45 &&
-                          numValue <= 60 &&
-                          (tempValue === null || numValue <= tempValue)
-                        ) {
-                          setInputDewPoint(value);
-                        }
-                      }
-                    }}
-                    placeholder="Indtast dugpunkt (-45 til 60°C)"
+                    onChange={handleInput(setInputDewPoint)}
+                    placeholder={`Indtast dugpunkt (${T_MIN} til ${T_MAX} °C)`}
+                    aria-describedby="dew-help dew-error"
                     className={`w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
-                      inputDewPoint &&
-                      inputDewPoint !== "" &&
-                      inputDewPoint !== "-" &&
-                      (parseFloat(inputDewPoint) < -45 ||
-                        parseFloat(inputDewPoint) > 60 ||
-                        (inputTemp &&
-                          parseFloat(inputDewPoint) > parseFloat(inputTemp)))
-                        ? "border-red-500 bg-red-50"
-                        : "border-gray-300"
+                      dewRangeError || pairError ? "border-red-500 bg-red-50" : "border-gray-300"
                     }`}
-                    step="0.1"
-                    min="-45"
-                    max="60"
                   />
-                  {inputDewPoint &&
-                    inputDewPoint !== "" &&
-                    inputDewPoint !== "-" &&
-                    (parseFloat(inputDewPoint) < -45 ||
-                      parseFloat(inputDewPoint) > 60 ||
-                      (inputTemp &&
-                        parseFloat(inputDewPoint) > parseFloat(inputTemp))) && (
-                      <p className="text-xs text-red-600 mt-1">
-                        {parseFloat(inputDewPoint) < -45 ||
-                        parseFloat(inputDewPoint) > 60
-                          ? "Dugpunkt skal være mellem -45°C og 60°C"
-                          : "Dugpunkt kan ikke være højere end temperaturen"}
-                      </p>
-                    )}
-                  <p className="text-xs text-gray-500 mt-1">
-                    Grøn streg tegnes vandret fra dugpunktet
+                  {(dewRangeError || pairError) && (
+                    <p id="dew-error" role="alert" className="text-xs text-red-700 mt-1">
+                      {dewRangeError || pairError}
+                    </p>
+                  )}
+                  <p id="dew-help" className="text-xs text-gray-600 mt-1">
+                    Grøn prikket streg tegnes op til kurven — sammen med
+                    temperaturen vises luftmassens punkt
                   </p>
                 </div>
               </div>
@@ -1045,22 +687,16 @@ export default function DugpunktskurveApp() {
                   {showUnsaturated ? "Skjul umættet" : "Vis umættet"}
                 </button>
 
-                {intersectionPoint && (
+                {intersection && (
                   <button
-                    onClick={
-                      showExplanation
-                        ? stopExplanationAnimation
-                        : startExplanationAnimation
-                    }
+                    onClick={showExplanation ? stopExplanation : startExplanation}
                     className={`w-full px-3 py-2 border rounded-lg ${
                       showExplanation
                         ? "bg-orange-50 hover:bg-orange-100 text-orange-700 border-orange-300"
-                        : "bg-green-50 hover:bg-green-100 text-green-700 border-green-300"
+                        : "bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-300"
                     }`}
                   >
-                    {showExplanation
-                      ? "Stop forklaring"
-                      : "Forklar beregningen"}
+                    {showExplanation ? "Stop forklaring" : "Forklar beregningen"}
                   </button>
                 )}
 
@@ -1072,8 +708,7 @@ export default function DugpunktskurveApp() {
                 </button>
               </div>
 
-              {(intersectionPoint ||
-                (showExplanation && inputTemp && inputDewPoint)) && (
+              {intersection && (
                 <div className="mt-3 p-2 bg-blue-50 border border-blue-200 rounded-lg">
                   <h3 className="font-semibold text-blue-800 mb-1 text-sm">
                     Beregning af relativ luftfugtighed
@@ -1081,46 +716,24 @@ export default function DugpunktskurveApp() {
 
                   <div className="space-y-1 text-xs">
                     <p>
-                      <strong style={{ color: "#ef4444" }}>
-                        Lufttemperatur:
-                      </strong>{" "}
-                      {intersectionPoint
-                        ? intersectionPoint.temperature
-                        : parseFloat(inputTemp)}{" "}
-                      °C
+                      <strong style={{ color: COL.redText }}>Lufttemperatur:</strong>{" "}
+                      {fmt1(temp)} °C
                     </p>
                     <p>
-                      <strong style={{ color: "#3b82f6" }}>
-                        Dugpunktstemperatur:
-                      </strong>{" "}
-                      {intersectionPoint
-                        ? intersectionPoint.dewPoint
-                        : parseFloat(inputDewPoint)}{" "}
-                      °C
+                      <strong style={{ color: COL.greenText }}>Dugpunktstemperatur:</strong>{" "}
+                      {fmt1(dewPoint)} °C
                     </p>
                     <p>
-                      <strong style={{ color: "#10b981" }}>
-                        Luftfugtighed:
-                      </strong>{" "}
-                      {intersectionPoint
-                        ? Math.round(intersectionPoint.humidity)
-                        : Math.round(
-                            absoluteHumidity(parseFloat(inputDewPoint))
-                          )}{" "}
-                      g/m³
+                      <strong style={{ color: COL.greenText }}>Faktisk vandindhold:</strong>{" "}
+                      {fmt1(intersection.faktiskD)} g/m³
                     </p>
                     <p>
-                      <strong style={{ color: "#8b5cf6" }}>
-                        Relativ luftfugtighed:
-                      </strong>{" "}
-                      {intersectionPoint
-                        ? Math.round(intersectionPoint.relativeHumidity)
-                        : Math.round(
-                            (absoluteHumidity(parseFloat(inputDewPoint)) /
-                              absoluteHumidity(parseFloat(inputTemp))) *
-                              100
-                          )}
-                      %
+                      <strong style={{ color: COL.redText }}>Maksimalt vandindhold:</strong>{" "}
+                      {fmt1(intersection.maksD)} g/m³
+                    </p>
+                    <p>
+                      <strong style={{ color: COL.purple }}>Relativ luftfugtighed:</strong>{" "}
+                      {fmt1(intersection.rhD)} %
                     </p>
                   </div>
 
@@ -1131,86 +744,37 @@ export default function DugpunktskurveApp() {
                       </p>
                       <p>
                         <InlineMath
-                          math={`\\text{RH} = \\frac{\\color{green}{${Math.round(
-                            absoluteHumidity(
-                              intersectionPoint
-                                ? intersectionPoint.dewPoint
-                                : parseFloat(inputDewPoint)
-                            )
-                          )} \\text{ g/m³}}}{\\color{red}{${Math.round(
-                            absoluteHumidity(
-                              intersectionPoint
-                                ? intersectionPoint.temperature
-                                : parseFloat(inputTemp)
-                            )
-                          )} \\text{ g/m³}}}`}
+                          math={`\\text{RH} = \\frac{\\textcolor{#047857}{\\text{${fmt1(
+                            intersection.faktiskD
+                          )} g/m³}}}{\\textcolor{#b91c1c}{\\text{${fmt1(intersection.maksD)} g/m³}}}`}
                         />
                       </p>
                       <p>
-                        <InlineMath
-                          math={`\\text{RH} = ${Math.round(
-                            (absoluteHumidity(
-                              intersectionPoint
-                                ? intersectionPoint.dewPoint
-                                : parseFloat(inputDewPoint)
-                            ) /
-                              absoluteHumidity(
-                                intersectionPoint
-                                  ? intersectionPoint.temperature
-                                  : parseFloat(inputTemp)
-                              )) *
-                              100
-                          )} \\%`}
-                        />
+                        <InlineMath math={`\\text{RH} = \\text{${fmt1(intersection.rhD)} \\%}`} />
                       </p>
                     </div>
                   </div>
                 </div>
               )}
 
-              <p className="mt-4 text-xs text-slate-500">
-                Magnus formel (Sonntag90): Ew = α·exp((β·T)/(λ+T)) hvor α=6.112
-                hPa, β=17.62, λ=243.12 °C.
-              </p>
-              <p className="mt-2 text-xs text-slate-400 text-center">
-                Philip K. Jakobsen
-              </p>
-            </div>
-          </div>
+              {pairError && !intersection && (
+                <div className="mt-3 p-2 bg-yellow-50 border border-yellow-300 rounded-lg" role="alert">
+                  <p className="text-xs text-yellow-900">
+                    <strong>Ugyldig kombination:</strong> {pairError} Ved mætning
+                    er dugpunktet lig med lufttemperaturen (RH = 100 %).
+                  </p>
+                </div>
+              )}
 
-          {/* Højre side - Graf */}
-          <div className="flex-1">
-            <div className="rounded-xl border">
-              <Plot
-                key={plotKey}
-                data={data}
-                layout={{ ...layout, autosize: true }}
-                style={{
-                  width: "100%",
-                  height: "70vh",
-                }}
-                config={config}
-                useResizeHandler
-                onRelayout={(eventData) => {
-                  if (
-                    eventData["xaxis.range[0]"] !== undefined &&
-                    eventData["xaxis.range[1]"] !== undefined &&
-                    eventData["yaxis.range[0]"] !== undefined &&
-                    eventData["yaxis.range[1]"] !== undefined
-                  ) {
-                    setCurrentZoom({
-                      x: [
-                        eventData["xaxis.range[0]"],
-                        eventData["xaxis.range[1]"],
-                      ],
-                      y: [
-                        eventData["yaxis.range[0]"],
-                        eventData["yaxis.range[1]"],
-                      ],
-                    });
-                  }
-                }}
-              />
+              <p className="mt-4 text-xs text-slate-500">
+                Magnus-formlen (Sonntag90): Ew = α·exp((β·T)/(λ+T)) hvor α=6,112
+                hPa, β=17,62, λ=243,12 °C. RH beregnes som forholdet mellem
+                absolut luftfugtighed ved dugpunktet og ved lufttemperaturen
+                (g/m³); meteorologiens damptryksdefinition giver op til ca. 2
+                procentpoint lavere værdier. Under 0 °C gælder kurven
+                (underafkølet) vand — mætning over is ligger lavere.
+              </p>
+              <p className="mt-2 text-xs text-slate-400 text-center">Philip K. Jakobsen</p>
             </div>
           </div>
         </div>
